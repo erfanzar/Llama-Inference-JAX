@@ -153,7 +153,7 @@ def flash_attention(
         num_warps: int | None = None,
         num_stages: int = 2,
         grid: tuple[int, ...] | None = None,
-        interpret: bool = False,
+        interpret: bool = ...,
         debug: bool = False,
 ):
     del backward_pass_impl
@@ -180,6 +180,8 @@ def flash_attention(
         None if attention_mask is None else pl.BlockSpec(lambda _, j, k: (j, 0), (None, seq_len))
     ]
     out_shape = jax.ShapeDtypeStruct(shape=query.shape, dtype=query.dtype)
+    if interpret == Ellipsis:
+        interpret = not (seq_len / 16).is_integer() or jax.lib.xla_bridge.get_backend().platform == "cpu"
     return pl.pallas_call(
         kernel,
         grid=grid_,
@@ -566,14 +568,12 @@ if __name__ == "__main__":
     v = jax.random.normal(k3, (b, s, nh, hd), "float16")
     sm_scale = 1 / math.sqrt(hd)
     attention_mask = None
-    interpret = not (s / 16).is_integer() or jax.lib.xla_bridge.get_backend().platform == "cpu"
     out = flash_attention(
         q,
         k,
         v,
         sm_scale=sm_scale,
         attention_mask=attention_mask,
-        interpret=interpret,
         block_k=32,
         block_q=32
     )
