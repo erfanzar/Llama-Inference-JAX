@@ -1,8 +1,8 @@
 import jax.lax
 from functools import partial
-from .pallas_oprations import matmul_2d_u_ref
-from typing import Literal
-from jax import Array
+from .pallas_oprations import matmul as matmul_pallas
+from typing import Literal, Tuple
+from jax import Array, numpy as jnp
 
 
 @partial(jax.jit, static_argnames=["operator", "block_sizes"])
@@ -10,27 +10,35 @@ def matmul(
         lhs: Array,
         rhs: Array,
         *,
-        block_sizes: tuple[int, ...] | None = None,
-        operator: Literal["pallas", "norm"] = "pallas"
+        block_sizes: int | None = None,
+        operator: Literal["pallas", "norm"] = "pallas",
+        interpret: bool = False
 ):
     if operator == "pallas":
         assert lhs.ndim == rhs.ndim
-        # if lhs.ndim == 3:
-        #     return matmul_3d(
-        #         lhs=lhs,
-        #         rhs=rhs,
-        #         block_sizes=block_sizes
-        #     )
-        
-        if lhs.ndim == 2:
-            return matmul_2d_u_ref(
-                lhs=lhs,
-                rhs=rhs,
-                block_sizes=block_sizes
-            )
-        else:
-            raise NotImplemented(f"pallas matmul kernel not implemented for given array with {lhs.ndim} dims.")
+        return matmul_pallas(
+            lhs=lhs,
+            rhs=rhs,
+            block_sizes=block_sizes,
+            interpret=interpret
+        )
     elif operator == "norm":
         return jax.lax.batch_matmul(lhs, rhs)
     else:
         raise ValueError("unknown operator")
+
+
+def un_quantize_array(
+        quantized: jnp.ndarray,
+        scale: jnp.ndarray,
+        float_dtype: jnp.dtype = jnp.float16,
+) -> Array:
+    max_scale = (jnp.iinfo(quantized.dtype).max + abs(jnp.iinfo(quantized.dtype).min)) / 2
+    return (jax.lax.convert_element_type(quantized, float_dtype) * scale) / max_scale
+
+
+def quantize_array(array: Array) -> Tuple[Array, Array]:
+    scale = jnp.max(jnp.abs(array), axis=-1, keepdims=True)
+    return jax.lax.convert_element_type(
+        jnp.rint(array * ((jnp.iinfo(jnp.int8).max + abs(jnp.iinfo(jnp.int8).min)) / 2 / scale)), jnp.int8
+    ), scale

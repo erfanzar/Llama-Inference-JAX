@@ -1,4 +1,4 @@
-from .llama.structure import (
+from .structure import (
     LlamaModelWeight as LlamaModelWeight,
     LlamaBlockWeight as LlamaBlockWeight,
     LlamaForCausalLMWeight as LlamaForCausalLMWeight,
