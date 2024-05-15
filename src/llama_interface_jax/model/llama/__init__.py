@@ -6,7 +6,8 @@ from .structure import (
     LlamaAttentionWeights as LlamaAttentionWeights,
     LlamaRMSNorm as LlamaRMSNorm,
     LiJAXEmbed as LiJAXEmbed,
-    LiJAXLlamaConfig as LiJAXLlamaConfig
+    LiJAXLlamaConfig as LiJAXLlamaConfig,
+    forward_llama_lm_head as forward_llama_lm_head
 )
 
 __all__ = (
@@ -17,5 +18,6 @@ __all__ = (
     "LlamaAttentionWeights",
     "LlamaRMSNorm",
     "LiJAXEmbed",
-    "LiJAXLlamaConfig"
+    "LiJAXLlamaConfig",
+    "forward_llama_lm_head"
 )

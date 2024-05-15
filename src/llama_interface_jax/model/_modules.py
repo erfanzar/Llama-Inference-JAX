@@ -1,5 +1,5 @@
-from typing import NamedTuple, Optional, List, Union, Dict, Tuple, Literal
-
+from typing import NamedTuple, Optional, List, Literal
+import math
 import jax
 from jax import numpy as jnp, Array
 from ..ops import matmul, un_quantize_array, pt2jax, quantize_array
@@ -32,9 +32,16 @@ class LiJAXLinear(NamedTuple):
                 self.weight_scale,
                 dtype
             )
+        if x.ndim != weight.ndim:
+            assert x.ndim == weight.ndim + 1, (
+                f"Expected weights and x to have same number of dimensions, "
+                f"got x:{x.ndim}, got weight:{weight.ndim}"
+            )
+            weight = jnp.expand_dims(weight, 0)
+
         res = matmul(
-            lhs=x,
-            rhs=weight,
+            lhs=x.astype(dtype),
+            rhs=weight.astype(dtype),
             operator=kernel,
             interpret=interpret,
             block_size=block_size
@@ -144,6 +151,9 @@ class KVMemory(NamedTuple):
             ) for _ in range(num_hidden_layers)
         ]
 
+    def __repr__(self):
+        return f"{self.__class__.__name__}(key={self.key.shape}, value={self.value.shape}, step={self.step})"
+
 
 def _rotate_half(array):
     x1 = array[..., : array.shape[-1] // 2]
@@ -156,16 +166,108 @@ def _apply_rotary_pos_embedding(array, sin, cos):
     return (array * cos[:, :, :sequence, :]) + (_rotate_half(array) * sin[:, :, :sequence, :])
 
 
-@partial(jax.jit, static_argnames=["runtime_dtype", "freq_cis"])
+@partial(jax.jit, static_argnames=["runtime_dtype", "freqs_cis"])
 def rotary_embedding(
         query: Array,
         key: Array,
-        freq_cis: FreqsCis,
+        freqs_cis: FreqsCis,
         position_ids: Array,
         runtime_dtype: jnp.dtype = jnp.float16
 ):
-    sin = freq_cis.sin[position_ids][:, None, :, :]
-    cos = freq_cis.cos[position_ids][:, None, :, :]
+    sin = freqs_cis.sin[position_ids][None, None, :, :]
+    cos = freqs_cis.cos[position_ids][None, None, :, :]
     key = _apply_rotary_pos_embedding(key, sin=sin, cos=cos)
     query = _apply_rotary_pos_embedding(query, sin=sin, cos=cos)
     return query.astype(runtime_dtype), key.astype(runtime_dtype)
+
+
+@partial(
+    jax.jit,  # Let XLA cache everything ...
+    static_argnames=[
+        "dim",
+        "max_position_embeddings",
+        "base",
+        "scaling_factor",
+        "rope_type",
+        "t_dtype",
+        "original_max_position_embeddings",
+        "long_factor",
+        "short_factor"
+    ]
+)
+def precompute_freqs_cis(
+        dim,
+        max_position_embeddings=2048,
+        base=10000,
+        scaling_factor=1.0,
+        rope_type: Optional[Literal["none", "linear", "dynamic", "yarn", "su",]] = None,
+        t_dtype: jnp.dtype = jnp.int32,
+        original_max_position_embeddings: Optional[int] = None,
+        long_factor: Optional[List[float]] = None,
+        short_factor: Optional[List[float]] = None
+) -> FreqsCis:
+    def _calc_yarn_scaling_factor(scale):
+        if scale <= 1.0:
+            return 1.0
+        return math.sqrt(1 + math.log(scale) / math.log(original_max_position_embeddings))
+
+    def _calc_su_scaling_factor(scale):
+        if scale <= 1.0:
+            return 1.0
+        return math.sqrt(1 + math.log(scale) / math.log(original_max_position_embeddings))
+
+    if t_dtype == jnp.int64:
+        jax.config.update("jax_enable_x64", True)
+
+    if rope_type is None or rope_type == "none":
+        t = jax.numpy.arange(max_position_embeddings, dtype=t_dtype)
+        inv_freq = 1.0 / (base ** (jax.numpy.arange(0, dim, 2, dtype=jax.numpy.float32) / dim))
+        freq = jax.numpy.einsum("i , j -> i j", t, inv_freq).astype("float32")
+        embed = jax.numpy.concatenate((freq, freq), axis=-1)
+        return FreqsCis(sin=jnp.sin(embed)[:, :], cos=jnp.cos(embed)[:, :])
+    elif rope_type == "linear":
+        t = jax.numpy.arange(max_position_embeddings, dtype=t_dtype)
+        t = t / scaling_factor
+        inv_freq = 1.0 / (base ** (jax.numpy.arange(0, dim, 2, dtype=jax.numpy.float32) / dim))
+        freq = jax.numpy.einsum("i , j -> i j", t, inv_freq).astype("float32")
+        embed = jax.numpy.concatenate((freq, freq), axis=-1)
+        return FreqsCis(sin=jnp.sin(embed)[:, :], cos=jnp.cos(embed)[:, :])
+    elif rope_type == "dynamic":
+        t = jax.numpy.arange(max_position_embeddings, dtype=t_dtype)
+        base = base * (scaling_factor - (scaling_factor - 1)) ** (dim / (dim - 2))
+        inv_freq = 1.0 / (base ** (jax.numpy.arange(0, dim, 2, dtype=jax.numpy.float32) / dim))
+        freq = jax.numpy.einsum("i , j -> i j", t, inv_freq).astype("float32")
+        embed = jax.numpy.concatenate((freq, freq), axis=-1)
+        return FreqsCis(sin=jnp.sin(embed)[:, :], cos=jnp.cos(embed)[:, :])
+    elif rope_type == "su":
+        assert original_max_position_embeddings is not None, "No original max position embeddings is provided"
+        if max_position_embeddings > original_max_position_embeddings:
+            ext_factors = jnp.array(long_factor, dtype=jnp.float32)
+        else:
+            ext_factors = jnp.array(short_factor, dtype=jnp.float32)
+        t_row = (jnp.arange(0, dim, 2, dtype=t_dtype).astype(jnp.float32) / dim)
+        inv_freq = 1.0 / (ext_factors * base ** t_row)[None, :, None]
+        position_ids = jnp.arange(0, max_position_embeddings, dtype="i4").reshape(1, -1)[:, None, :].astype("float32")
+        freqs = (inv_freq @ position_ids).transpose(0, 2, 1)
+        scaling_factor = _calc_su_scaling_factor(max_position_embeddings / original_max_position_embeddings)
+        emb = jnp.concatenate((freqs, freqs), axis=-1)
+        cos = jnp.cos(emb) * scaling_factor
+        sin = jnp.sin(emb) * scaling_factor
+        return FreqsCis(sin=sin[0], cos=cos[0])
+    elif rope_type == "yarn":
+        assert original_max_position_embeddings is not None, "No original max position embeddings is provided"
+        if max_position_embeddings > original_max_position_embeddings:
+            ext_factors = jnp.array(long_factor, dtype=jnp.float32)
+        else:
+            ext_factors = jnp.array(short_factor, dtype=jnp.float32)
+        t_row = (jnp.arange(0, dim, 2, dtype=t_dtype).astype(jnp.float32) / dim)
+        inv_freq = 1.0 / (ext_factors * base ** t_row)[None, :, None]
+        position_ids = jnp.arange(0, max_position_embeddings, dtype="i4").reshape(1, -1)[:, None, :].astype("float32")
+        freqs = (inv_freq @ position_ids).transpose(0, 2, 1)
+        scaling_factor = _calc_yarn_scaling_factor(max_position_embeddings / original_max_position_embeddings)
+        emb = jnp.concatenate((freqs, freqs), axis=-1)
+        cos = jnp.cos(emb) * scaling_factor
+        sin = jnp.sin(emb) * scaling_factor
+        return FreqsCis(sin=sin[0], cos=cos[0])
+
+    raise "wrong rope type has been given"

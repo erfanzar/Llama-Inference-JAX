@@ -4,8 +4,20 @@ from functools import partial
 import jax.lax
 from jax import numpy as jnp, Array
 from dataclasses import dataclass
-from ...ops import un_quantize_array, flash_attention, matmul, dot_product_attention, repeat_key_value
-from .._modules import LiJAXLinear, LiJAXEmbed, FreqsCis, rotary_embedding, KVMemory
+from ...ops import (
+    un_quantize_array,
+    flash_attention,
+    dot_product_attention,
+    repeat_key_value
+)
+from .._modules import (
+    LiJAXLinear,
+    LiJAXEmbed,
+    FreqsCis,
+    rotary_embedding,
+    KVMemory,
+    precompute_freqs_cis
+)
 
 
 def _pad_repr(repr_str: str) -> str:
@@ -37,7 +49,6 @@ class LiJAXLlamaConfig:
 
 
 class LlamaAttentionWeights(NamedTuple):
-    config: LiJAXLlamaConfig
     q_proj: LiJAXLinear
     k_proj: LiJAXLinear
     v_proj: LiJAXLinear
@@ -55,7 +66,6 @@ class LlamaAttentionWeights(NamedTuple):
 
 
 class LlamaMLPWeights(NamedTuple):
-    config: LiJAXLlamaConfig
     # Llama MLP don't use Bias
     gate_proj: LiJAXLinear
     down_proj: LiJAXLinear
@@ -80,9 +90,19 @@ class LlamaRMSNorm(NamedTuple):
             f"{self.__class__.__name__}(shape = ({self.weight.shape},), quantized = {self.weight_scale is None})"
         )
 
+    @partial(jax.jit, static_argnames=["eps", "dtype"])
+    def __call__(self, x: Array, eps: float = 1e-6, dtype: jnp.dtype = jnp.float16) -> Array:
+        x = x.astype("float32")
+        norm = x * jax.lax.rsqrt(jnp.square(x).mean(-1, keepdims=True) + eps)
+        weight = self.weight
+        if self.weight_scale is not None:
+            weight = un_quantize_array(quantized=weight, scale=self.weight_scale, float_dtype=dtype)
+        weight = weight.astype(dtype)
+        norm = norm.astype(dtype)
+        return weight * norm
+
 
 class LlamaBlockWeight(NamedTuple):
-    config: LiJAXLlamaConfig
     mlp: LlamaMLPWeights
     self_attn: LlamaAttentionWeights
     input_layer_norm: LlamaRMSNorm
@@ -100,7 +120,6 @@ class LlamaBlockWeight(NamedTuple):
 
 
 class LlamaModelWeight(NamedTuple):
-    config: LiJAXLlamaConfig
     embed_tokens: LiJAXEmbed
     layers: List[LlamaBlockWeight]
     norm: LlamaRMSNorm
@@ -138,14 +157,18 @@ _c_axes = lambda x: x.transpose(0, 2, 1, 3)
 @partial(
     jax.jit,
     static_argnames=[
-        "block",
-        "freqs_cis",
+        # "block",
+        # "freqs_cis",
         "runtime_dtype",
         "runtime_kernel",
         "interpret",
+        "init_cache",
         "use_flash_attention",
         "block_key",
-        "block_query"
+        "block_query",
+        "hidden_size",
+        "num_key_value_heads",
+        "num_attention_heads"
     ]
 )
 def forward_llama_attention(
@@ -154,6 +177,9 @@ def forward_llama_attention(
         attention_mask: Array,
         causal_mask: Array,
         freqs_cis: FreqsCis,
+        hidden_size: int,
+        num_attention_heads: int,
+        num_key_value_heads: int,
         past_key_values: Optional[KVMemory] = None,
         init_cache: bool = False,
         runtime_dtype: jnp.dtype = jnp.float16,
@@ -163,23 +189,21 @@ def forward_llama_attention(
         block_key: int = 128,
         block_query: int = 128
 ) -> Tuple[Array, Optional[KVMemory]]:
-    config = block.config
-    batch_size, sequence_length, hidden_size = hidden_states.shape
-    head_dim = config.hidden_size // config.num_attention_heads
-    num_rep_heads = config.num_attention_heads // config.num_key_value_heads
-
+    batch_size, sequence_length, _ = hidden_states.shape
+    head_dim = hidden_size // num_attention_heads
+    num_rep_heads = num_attention_heads // num_key_value_heads
     query = block.q_proj(hidden_states, kernel=runtime_kernel, interpret=interpret, dtype=runtime_dtype)
     key = block.k_proj(hidden_states, kernel=runtime_kernel, interpret=interpret, dtype=runtime_dtype)
     value = block.v_proj(hidden_states, kernel=runtime_kernel, interpret=interpret, dtype=runtime_dtype)
 
-    query = query.reshape(batch_size, sequence_length, config.num_attention_heads, head_dim)
-    key = key.reshape(batch_size, sequence_length, config.num_key_value_heads, head_dim)
-    value = value.reshape(batch_size, sequence_length, config.num_key_value_heads, head_dim)
+    query = query.reshape(batch_size, sequence_length, num_attention_heads, head_dim)
+    key = key.reshape(batch_size, sequence_length, num_key_value_heads, head_dim)
+    value = value.reshape(batch_size, sequence_length, num_key_value_heads, head_dim)
     query, key = rotary_embedding(
         query=_c_axes(query),
         key=_c_axes(key),
         freqs_cis=freqs_cis,
-        position_ids=past_key_values.step if past_key_values else 0,
+        position_ids=past_key_values.step if past_key_values else jnp.arange(0, sequence_length),
         runtime_dtype=runtime_dtype
     )
     key = repeat_key_value(key, num_rep_heads)
@@ -189,6 +213,7 @@ def forward_llama_attention(
     key = _c_axes(key)
     value = _c_axes(value)
     new_past_key_values = None
+
     if past_key_values is not None:
         @partial(jax.vmap)
         def dynamic_update_slice_in_dim(memory, start, update):
@@ -204,17 +229,8 @@ def forward_llama_attention(
             value=value,
             step=new_step,
         )
-    if init_cache and past_key_values is None:
-        new_past_key_values = KVMemory.init_memory(
-            batch_size=batch_size,
-            sequence_length=sequence_length,
-            head_dims=head_dim,
-            num_key_value_heads=config.num_key_value_heads,
-            dtype=runtime_dtype
-        )
-
     query_length, key_length = query.shape[1], key.shape[1]
-    causal_mask = causal_mask[:, :, :query_length, :key_length]
+    causal_mask = causal_mask[jnp.newaxis, jnp.newaxis, :query_length, :key_length]
 
     batch_size = hidden_states.shape[0]
     causal_mask = jnp.broadcast_to(causal_mask, (batch_size,) + causal_mask.shape[1:])
@@ -248,7 +264,9 @@ def forward_llama_attention(
 @partial(
     jax.jit,
     static_argnames=[
-        "block", "runtime_dtype", "runtime_kernel", "interpret"
+        "runtime_dtype",
+        "runtime_kernel",
+        "interpret"
     ]
 )
 def forward_llama_mlp(
@@ -257,7 +275,7 @@ def forward_llama_mlp(
         runtime_dtype: jnp.dtype = jnp.float16,
         runtime_kernel: Literal["pallas", "normal"] = "pallas",
         interpret: bool = True,
-):
+) -> Array:
     return block.down_proj(
         jax.nn.silu(block.gate_proj(
             hidden_states,
@@ -282,6 +300,10 @@ def forward_llama_block(
         attention_mask: Array,
         causal_mask: Array,
         freqs_cis: FreqsCis,
+        rms_norm_eps: float,
+        num_attention_heads: int,
+        hidden_size: int,
+        num_key_value_heads: int,
         past_key_values: Optional[KVMemory] = None,
         init_cache: bool = False,
         runtime_dtype: jnp.dtype = jnp.float16,
@@ -290,38 +312,144 @@ def forward_llama_block(
         use_flash_attention: bool = True,
         block_key: int = 128,
         block_query: int = 128
-): ...
+) -> Tuple[Array, Optional[KVMemory]]:
+    attention_output, new_key_values = forward_llama_attention(
+        block=block.self_attn,
+        hidden_states=block.input_layer_norm(hidden_states, rms_norm_eps, runtime_dtype),
+        interpret=interpret,
+        attention_mask=attention_mask,
+        block_key=block_key,
+        block_query=block_query,
+        causal_mask=causal_mask,
+        freqs_cis=freqs_cis,
+        init_cache=init_cache,
+        past_key_values=past_key_values,
+        runtime_dtype=runtime_dtype,
+        runtime_kernel=runtime_kernel,
+        use_flash_attention=use_flash_attention,
+        num_key_value_heads=num_key_value_heads,
+        num_attention_heads=num_attention_heads,
+        hidden_size=hidden_size
+    )
+    hidden_states = hidden_states + attention_output
+
+    ffn_output = forward_llama_mlp(
+        block=block.mlp,
+        hidden_states=block.post_attention_layer_norm(hidden_states, rms_norm_eps, runtime_dtype),
+        runtime_dtype=runtime_dtype,
+        runtime_kernel=runtime_kernel,
+        interpret=interpret,
+    )
+    hidden_states = hidden_states + ffn_output
+    return hidden_states, new_key_values
 
 
 def forward_llama_model(
-        config: LiJAXLlamaConfig,
-        block: LlamaBlockWeight,
-        hidden_states: Array,
+        block: LlamaModelWeight,
+        input_ids: Array,
         attention_mask: Array,
-        causal_mask: Array,
-        freqs_cis: Tuple[Array, Array],
-        past_key_values: Optional[Tuple[Array, Array]] = None,
+        rms_norm_eps: float,
+        num_attention_heads: int,
+        hidden_size: int,
+        num_key_value_heads: int,
+        num_hidden_layers: int,
+        max_position_embeddings: int,
+        rope_theta: float | int,
+        rope_type: Optional[str] = None,
+        scaling_factor: Optional[float] = None,
+        past_key_values: Optional[List[KVMemory]] = None,
+        input_embeds: Optional[Array] = None,
         init_cache: bool = False,
         runtime_dtype: jnp.dtype = jnp.float16,
         runtime_kernel: Literal["pallas", "normal"] = "pallas",
         use_flash_attention: bool = True,
+        interpret: bool = True,
         block_key: int = 128,
         block_query: int = 128
-): ...
+) -> Tuple[Array, Optional[List[KVMemory]]]:
+    new_key_values = []
+    if past_key_values is None:
+        past_key_values = [None] * num_hidden_layers
+    if input_embeds is None:
+        input_embeds = block.embed_tokens(input_ids, runtime_dtype)
+    hidden_states = input_embeds
+    causal_mask = jnp.tril(
+        jnp.ones(
+            (max_position_embeddings, max_position_embeddings),
+            dtype="bool"
+        )
+    )
+    freqs_cis = precompute_freqs_cis(
+        dim=hidden_size // num_attention_heads,
+        max_position_embeddings=max_position_embeddings,
+        base=rope_theta,
+        rope_type=rope_type,
+        scaling_factor=scaling_factor
+    )
+
+    for layer_idx in range(num_hidden_layers):
+        hidden_states, new_key_value = forward_llama_block(
+            block=block.layers[layer_idx],
+            hidden_states=hidden_states,
+            block_key=block_key,
+            past_key_values=past_key_values[layer_idx],
+            runtime_kernel=runtime_kernel,
+            freqs_cis=freqs_cis,
+            block_query=block_query,
+            causal_mask=causal_mask,
+            init_cache=init_cache,
+            runtime_dtype=runtime_dtype,
+            attention_mask=attention_mask,
+            use_flash_attention=use_flash_attention,
+            interpret=interpret,
+            num_key_value_heads=num_key_value_heads,
+            num_attention_heads=num_attention_heads,
+            hidden_size=hidden_size,
+            rms_norm_eps=rms_norm_eps
+        )
+        new_key_values.append(new_key_value)
+    return block.norm(hidden_states, rms_norm_eps, runtime_dtype), new_key_values
 
 
 def forward_llama_lm_head(
-        config: LiJAXLlamaConfig,
         block: LlamaForCausalLMWeight,
-        hidden_states: Array,
-        attention_mask: Array,
-        causal_mask: Array,
-        freqs_cis: Tuple[Array, Array],
-        past_key_values: Optional[Tuple[Array, Array]] = None,
+        input_ids: Array,
+        attention_mask: Optional[Array] = None,
+        past_key_values: Optional[List[KVMemory]] = None,
+        input_embeds: Optional[Array] = None,
         init_cache: bool = False,
         runtime_dtype: jnp.dtype = jnp.float16,
         runtime_kernel: Literal["pallas", "normal"] = "pallas",
         use_flash_attention: bool = True,
+        interpret: bool = True,
         block_key: int = 128,
         block_query: int = 128
-): ...
+) -> Tuple[Array, Optional[List[KVMemory]]]:
+    batch, seq_len = input_ids.shape
+    config = block.config
+    if attention_mask is None:
+        attention_mask = jnp.ones((batch, seq_len), dtype="i4")
+    hidden_states, new_key_values = forward_llama_model(
+        block=block.model,
+        input_ids=input_ids,
+        past_key_values=past_key_values,
+        runtime_kernel=runtime_kernel,
+        block_query=block_query,
+        init_cache=init_cache,
+        runtime_dtype=runtime_dtype,
+        attention_mask=attention_mask,
+        interpret=interpret,
+        use_flash_attention=use_flash_attention,
+        block_key=block_key,
+        input_embeds=input_embeds,
+        rms_norm_eps=config.rms_norm_eps,
+        hidden_size=config.hidden_size,
+        num_key_value_heads=config.num_key_value_heads,
+        num_attention_heads=config.num_attention_heads,
+        scaling_factor=getattr(config.rope_scaling, "scaling_factor", None),
+        rope_type=getattr(config.rope_scaling, "rope_type", None),
+        max_position_embeddings=config.max_position_embeddings,
+        num_hidden_layers=config.num_hidden_layers,
+        rope_theta=config.rope_theta,
+    )
+    return block.lm_head(hidden_states, interpret=interpret, dtype=runtime_dtype, kernel=runtime_kernel), new_key_values

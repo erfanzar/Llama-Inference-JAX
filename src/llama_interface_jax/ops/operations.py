@@ -22,7 +22,7 @@ def matmul(
             block_size=block_size,
             interpret=interpret
         )
-    elif operator == "norm":
+    elif operator == "normal":
         return jax.lax.batch_matmul(lhs, rhs)
     else:
         raise ValueError("unknown operator")
@@ -51,13 +51,8 @@ def pt2jax(tensor: "torch.Tensor") -> jax.Array:  # type:ignore
 def repeat_key_value(kv: Array, n_rep: int) -> Array:
     if n_rep == 1:
         return kv
-    bs, s, n_kv_heads, head_dim = kv.shape
-    kv = kv[:, :, jnp.newaxis, :, :]
-    kv = jnp.repeat(kv, n_rep, axis=2)
+    bs, n_kv_heads, s, head_dim = kv.shape
+    kv = kv[:, :, jax.numpy.newaxis, :, :]
+    kv = jax.numpy.repeat(kv, n_rep, axis=2)
 
-    return kv.reshape(
-        bs,
-        s,
-        n_kv_heads * n_rep,
-        head_dim
-    )
+    return kv.reshape(bs, n_kv_heads * n_rep, s, head_dim)

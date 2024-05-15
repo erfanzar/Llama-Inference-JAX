@@ -5,6 +5,7 @@ __pycache__/
 
 # C extensions
 *.so
+lijax_llama_model.pkl
 # Distribution / packaging
 .Python
 build/

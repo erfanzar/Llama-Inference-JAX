@@ -5,7 +5,8 @@ from .llama.structure import (
     LlamaMLPWeights as LlamaMLPWeights,
     LlamaAttentionWeights as LlamaAttentionWeights,
     LlamaRMSNorm as LlamaRMSNorm,
-    LiJAXLlamaConfig as LiJAXLlamaConfig
+    LiJAXLlamaConfig as LiJAXLlamaConfig,
+    forward_llama_lm_head as forward_llama_lm_head
 )
 from ._modules import (
     LiJAXLinear as LiJAXLinear,
@@ -21,5 +22,6 @@ __all__ = (
     "LlamaRMSNorm",
     "LiJAXLlamaConfig",
     "LiJAXLinear",
-    "LiJAXEmbed"
+    "LiJAXEmbed",
+    "forward_llama_lm_head"
 )
