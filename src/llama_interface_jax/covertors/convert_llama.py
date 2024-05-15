@@ -2,6 +2,7 @@ import jax.numpy
 import torch
 from transformers import LlamaForCausalLM, LlamaConfig, AutoTokenizer
 from typing import Optional
+from tqdm import tqdm
 
 from ..model import (
     LlamaModelWeight,
@@ -53,7 +54,7 @@ def convert_llama_model_weights_to_lijax(
     )
     layers = []
 
-    for layer_idx in config.num_hidden_layers:
+    for layer_idx in tqdm(range(config.num_hidden_layers)):
         self_attn = LlamaAttentionWeights(
             config=lijax_config,
             q_proj=LiJAXLinear.from_torch(torch_model.model.layers[layer_idx].self_attn.q_proj,
@@ -72,9 +73,9 @@ def convert_llama_model_weights_to_lijax(
             up_proj=LiJAXLinear.from_torch(torch_model.model.layers[layer_idx].mlp.up_proj, quantize=quantize_mlp),
             down_proj=LiJAXLinear.from_torch(torch_model.model.layers[layer_idx].mlp.down_proj, quantize=quantize_mlp),
         )
-        input_layer_norm = LlamaRMSNorm(weight=pt2jax(torch_model.model.layers[layer_idx].input_layer_norm.weight))
+        input_layer_norm = LlamaRMSNorm(weight=pt2jax(torch_model.model.layers[layer_idx].input_layernorm.weight))
         post_attention_layer_norm = LlamaRMSNorm(
-            weight=pt2jax(torch_model.model.layers[layer_idx].post_attention_layer_norm.weight))
+            weight=pt2jax(torch_model.model.layers[layer_idx].post_attention_layernorm.weight))
         layers.append(
             LlamaBlockWeight(
                 config=lijax_config,
@@ -124,4 +125,4 @@ def convert_llama_model(
         quantize_self_attn=quantize_self_attn
     )
 
-    print(lijax_model)
+    return lijax_model

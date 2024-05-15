@@ -11,7 +11,7 @@ def matmul(
         rhs: Array,
         *,
         block_size: int | None = None,
-        operator: Literal["pallas", "norm"] = "pallas",
+        operator: Literal["pallas", "normal"] = "pallas",
         interpret: bool = False
 ):
     if operator == "pallas":
@@ -46,3 +46,18 @@ def quantize_array(array: Array) -> Tuple[Array, Array]:
 
 def pt2jax(tensor: "torch.Tensor") -> jax.Array:  # type:ignore
     return jax.numpy.asarray(tensor.detach().cpu().numpy())
+
+
+def repeat_key_value(kv: Array, n_rep: int) -> Array:
+    if n_rep == 1:
+        return kv
+    bs, s, n_kv_heads, head_dim = kv.shape
+    kv = kv[:, :, jnp.newaxis, :, :]
+    kv = jnp.repeat(kv, n_rep, axis=2)
+
+    return kv.reshape(
+        bs,
+        s,
+        n_kv_heads * n_rep,
+        head_dim
+    )
