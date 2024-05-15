@@ -2,14 +2,20 @@ from .structure import (
     LlamaModelWeight as LlamaModelWeight,
     LlamaBlockWeight as LlamaBlockWeight,
     LlamaForCausalLMWeight as LlamaForCausalLMWeight,
-    MLPWeights as MLPWeights,
-    AttentionWeights as AttentionWeights
+    LlamaMLPWeights as LlamaMLPWeights,
+    LlamaAttentionWeights as LlamaAttentionWeights,
+    LlamaRMSNorm as LlamaRMSNorm,
+    LiJAXEmbed as LiJAXEmbed,
+    LiJAXLlamaConfig as LiJAXLlamaConfig
 )
 
 __all__ = (
     "LlamaModelWeight",
     "LlamaBlockWeight",
     "LlamaForCausalLMWeight",
-    "MLPWeights",
-    "AttentionWeights"
+    "LlamaMLPWeights",
+    "LlamaAttentionWeights",
+    "LlamaRMSNorm",
+    "LiJAXEmbed",
+    "LiJAXLlamaConfig"
 )

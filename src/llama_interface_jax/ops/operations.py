@@ -5,12 +5,12 @@ from typing import Literal, Tuple
 from jax import Array, numpy as jnp
 
 
-@partial(jax.jit, static_argnames=["operator", "block_sizes"])
+@partial(jax.jit, static_argnames=["operator", "block_size", "interpret"])
 def matmul(
         lhs: Array,
         rhs: Array,
         *,
-        block_sizes: int | None = None,
+        block_size: int | None = None,
         operator: Literal["pallas", "norm"] = "pallas",
         interpret: bool = False
 ):
@@ -19,7 +19,7 @@ def matmul(
         return matmul_pallas(
             lhs=lhs,
             rhs=rhs,
-            block_sizes=block_sizes,
+            block_size=block_size,
             interpret=interpret
         )
     elif operator == "norm":
@@ -42,3 +42,7 @@ def quantize_array(array: Array) -> Tuple[Array, Array]:
     return jax.lax.convert_element_type(
         jnp.rint(array * ((jnp.iinfo(jnp.int8).max + abs(jnp.iinfo(jnp.int8).min)) / 2 / scale)), jnp.int8
     ), scale
+
+
+def pt2jax(tensor: "torch.Tensor") -> jax.Array:  # type:ignore
+    return jax.numpy.asarray(tensor.detach().cpu().numpy())
