@@ -1,35 +1,50 @@
 import pickle
 
-from src.llama_interface_jax.model import forward_llama_lm_head
+from src.llama_interface_jax.model import (
+    forward_llama_lm_head,
+    KVMemory,
+    LlamaForCausalLMWeight,
+)
+from src.llama_interface_jax.generation import prepare_input, sample_token, SampleSettings
+from src.llama_interface_jax.utils import GenerateRNG
 from jax import numpy as jnp
+
+rng = GenerateRNG()
 
 
 def main():
-    block = pickle.load(open("lijax_llama_model.pkl", "rb"))
+    batch_size = 1
+    max_sequence_length = 64
+    block: LlamaForCausalLMWeight = pickle.load(open("lijax_llama_model.pkl", "rb"))
     input_ids = jnp.array([1, 2, 3, 4, 5, 6, ], dtype="i4").reshape(1, -1)
-    res, new_past_key_value = forward_llama_lm_head(
+    input_ids, attention_mask = prepare_input(input_ids, max_sequence_length)
+    memory = KVMemory.init_layer_memories(
+        batch_size=batch_size,
+        dtype=jnp.float16,
+        head_dims=block.config.hidden_size // block.config.num_attention_heads,
+        num_key_value_heads=block.config.num_attention_heads,
+        sequence_length=max_sequence_length,
+        num_hidden_layers=block.config.num_hidden_layers
+    )
+    res, memory = forward_llama_lm_head(
         block=block,
         input_ids=input_ids,
         runtime_kernel="normal",
-        init_cache=True
+        use_flash_attention=False
+        # past_key_values=memory
     )
-    """
-[[[ -7.68   -10.63     1.446  ...  -3.635   -6.56    -3.758 ]
-[ -0.2146  19.52     1.4375 ...   0.583   -2.098    3.172 ]
-[ -5.26    -5.54     5.875  ...  -4.49    -6.445   -0.971 ]
-[ -5.5     -5.484    5.316  ...  -4.184   -5.68    -1.433 ]
-[ -4.93    -5.293    5.58   ...  -4.188   -4.293   -0.604 ]
-[ -4.527   -5.223    4.477  ...  -2.432   -4.96    -1.414 ]]]
-
-[[[ -7.695  -10.66     1.449  ...  -3.643   -6.57    -3.764 ]
-  [ -0.208   19.53     1.429  ...   0.588   -2.084    3.176 ]
-  [ -5.266   -5.54     5.875  ...  -4.49    -6.445   -0.9673]
-  [ -5.496   -5.48     5.316  ...  -4.184   -5.676   -1.433 ]
-  [ -4.934   -5.29     5.582  ...  -4.188   -4.29    -0.604 ]
-  [ -4.527   -5.223    4.48   ...  -2.434   -4.965   -1.412 ]]]
-    """
+    out = sample_token(
+        rng.rng,
+        res,
+        SampleSettings(
+            temperature=jnp.array([0.4]),
+            mask=attention_mask,
+            nucleus_p=jnp.array([0.95]),
+            active=jnp.array([True])
+        )
+    )
     print(res)
-    print(new_past_key_value)
+    print(out)
 
 
 if __name__ == '__main__':

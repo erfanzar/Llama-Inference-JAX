@@ -10,7 +10,8 @@ from .llama.structure import (
 )
 from ._modules import (
     LiJAXLinear as LiJAXLinear,
-    LiJAXEmbed as LiJAXEmbed
+    LiJAXEmbed as LiJAXEmbed,
+    KVMemory as KVMemory
 )
 
 __all__ = (
@@ -23,5 +24,6 @@ __all__ = (
     "LiJAXLlamaConfig",
     "LiJAXLinear",
     "LiJAXEmbed",
-    "forward_llama_lm_head"
+    "forward_llama_lm_head",
+    "KVMemory"
 )

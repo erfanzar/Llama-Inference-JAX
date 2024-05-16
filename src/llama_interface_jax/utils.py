@@ -29,7 +29,7 @@ class GenerateRNG:
 
         """
         while True:
-            self._rng, ke = jax.random.split(self._rng, 2)
+            self._rng, ke = jax.random.split(self._rng, )
             return ke
 
     @property
