@@ -89,7 +89,7 @@ class LlamaRMSNorm(NamedTuple):
 
     def __repr__(self) -> str:
         return (
-            f"{self.__class__.__name__}(shape = ({self.weight.shape},), quantized = {self.weight_scale is None})"
+            f"{self.__class__.__name__}(shape = ({self.weight.shape},), quantized = {self.weight_scale is not None})"
         )
 
     @partial(jax.jit, static_argnames=["eps", "dtype"])
