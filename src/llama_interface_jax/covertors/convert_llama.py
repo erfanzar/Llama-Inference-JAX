@@ -71,9 +71,9 @@ def convert_llama_model_weights_to_lijax(
             up_proj=LiJAXLinear.from_torch(torch_model.model.layers[layer_idx].mlp.up_proj, quantize=quantize_mlp),
             down_proj=LiJAXLinear.from_torch(torch_model.model.layers[layer_idx].mlp.down_proj, quantize=quantize_mlp),
         )
-        input_layer_norm = LlamaRMSNorm.from_torch(torch_model.model.layers[layer_idx].input_layernorm)
+        input_layer_norm = LlamaRMSNorm.from_torch(torch_model.model.layers[layer_idx].input_layernorm, True)
         post_attention_layer_norm = LlamaRMSNorm.from_torch(
-            torch_model.model.layers[layer_idx].post_attention_layernorm
+            torch_model.model.layers[layer_idx].post_attention_layernorm, True
         )
         layers.append(
             LlamaBlockWeight(
@@ -84,7 +84,7 @@ def convert_llama_model_weights_to_lijax(
             )
         )
     embed = LiJAXEmbed.from_torch(torch_model.model.embed_tokens, quantize=quantize_embed)
-    norm = LlamaRMSNorm.from_torch(torch_model.model.norm)
+    norm = LlamaRMSNorm.from_torch(torch_model.model.norm, True)
     model = LlamaModelWeight(layers=layers, embed_tokens=embed, norm=norm)
     lm_head = LiJAXLinear.from_torch(torch_model.lm_head, quantize=quantize_lm_head)
     causal_language_model = LlamaForCausalLMWeight(config=lijax_config, model=model, lm_head=lm_head)
