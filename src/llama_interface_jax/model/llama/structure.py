@@ -214,7 +214,14 @@ def forward_llama_attention(
         query=_c_axes(query),
         key=_c_axes(key),
         freqs_cis=freqs_cis,
-        position_ids=past_key_values.step if past_key_values else jnp.arange(0, sequence_length),
+        position_ids=jnp.arange(
+            past_key_values.step,
+            sequence_length + past_key_values.step,
+            1
+        ) if past_key_values else jnp.arange(
+            0,
+            sequence_length
+        ),
         runtime_dtype=runtime_dtype
     )
     key = repeat_key_value(key, num_rep_heads)

@@ -127,7 +127,7 @@ class LiJAXEmbed(NamedTuple):
 class KVMemory(NamedTuple):
     key: Array
     value: Array
-    step: Optional[Array]
+    step: Array
 
     @classmethod
     def init_memory(
@@ -142,7 +142,7 @@ class KVMemory(NamedTuple):
         return cls(
             key=jnp.zeros((batch_size, sequence_length, num_key_value_heads, head_dims), dtype=dtype),
             value=jnp.zeros((batch_size, sequence_length, num_key_value_heads, head_dims), dtype=dtype),
-            step=step
+            step=step or jnp.zeros((batch_size, 1), dtype="i4")
         )
 
     @classmethod
@@ -160,7 +160,7 @@ class KVMemory(NamedTuple):
             cls(
                 key=jnp.zeros((batch_size, sequence_length, num_key_value_heads, head_dims), dtype=dtype),
                 value=jnp.zeros((batch_size, sequence_length, num_key_value_heads, head_dims), dtype=dtype),
-                step=step
+                step=step or jnp.zeros((batch_size, 1), dtype="i4")
             ) for _ in range(num_hidden_layers)
         ]
 

@@ -9,7 +9,7 @@ import torch
 
 def comparing_linear():
     x = torch.randn((1, 5))
-    linear = nn.Linear(5, 10, bias=False)
+    linear = nn.Linear(5, 10, bias=True)
     uq_lijax_linear = LiJAXLinear.from_torch(linear, quantize=False)
     q_lijax_linear = LiJAXLinear.from_torch(linear, quantize=True)
     print(f"TORCH    LINEAR : {linear}")

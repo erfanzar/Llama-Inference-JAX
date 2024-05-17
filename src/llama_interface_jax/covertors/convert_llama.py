@@ -36,7 +36,7 @@ def convert_llama_model_weights_to_lijax(
         intermediate_size=config.intermediate_size,
         num_hidden_layers=config.num_hidden_layers,
         num_attention_heads=config.num_attention_heads,
-        number_rep_kv=config.number_rep_kv,
+        number_rep_kv=getattr(config, "number_rep_kv", 1),
         num_key_value_heads=config.num_key_value_heads,
         max_position_embeddings=config.max_position_embeddings,
         rms_norm_eps=config.rms_norm_eps,
