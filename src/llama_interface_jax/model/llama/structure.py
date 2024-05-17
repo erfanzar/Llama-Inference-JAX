@@ -8,7 +8,9 @@ from ...ops import (
     un_quantize_array,
     flash_attention,
     dot_product_attention,
-    repeat_key_value
+    repeat_key_value,
+    quantize_array,
+    pt2jax
 )
 from .._modules import (
     LiJAXLinear,
@@ -100,6 +102,17 @@ class LlamaRMSNorm(NamedTuple):
         weight = weight.astype(dtype)
         norm = norm.astype(dtype)
         return weight * norm
+
+    @classmethod
+    def from_torch(cls, head_module, quantize: bool = False):
+        weight = pt2jax(head_module.weight)
+        weight_scale = None
+        if quantize:
+            weight, weight_scale = quantize_array(weight)
+        return cls(
+            weight=weight,
+            weight_scale=weight_scale,
+        )
 
 
 class LlamaBlockWeight(NamedTuple):

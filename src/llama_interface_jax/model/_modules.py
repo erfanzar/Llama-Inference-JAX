@@ -1,3 +1,4 @@
+import functools
 from typing import NamedTuple, Optional, List, Literal
 import math
 import jax
@@ -14,7 +15,9 @@ class FreqsCis(NamedTuple):
 class LiJAXLinear(NamedTuple):
     weight: Array
     bias: Optional[Array] = None
+
     weight_scale: Optional[Array] = None
+    bias_scale: Optional[Array] = None
 
     @partial(jax.jit, static_argnames=["kernel", "interpret", "block_size", "dtype"])
     def __call__(
@@ -32,6 +35,7 @@ class LiJAXLinear(NamedTuple):
                 self.weight_scale,
                 dtype
             )
+
         if x.ndim != weight.ndim:
             assert x.ndim == weight.ndim + 1, (
                 f"Expected weights and x to have same number of dimensions, "
@@ -46,6 +50,15 @@ class LiJAXLinear(NamedTuple):
             interpret=interpret,
             block_size=block_size
         )
+        if self.bias is not None:
+            bias = self.bias
+            if self.bias_scale is not None:
+                bias = un_quantize_array(
+                    weight,
+                    self.bias_scale,
+                    dtype
+                )
+            res = res + bias
         return res
 
     def __repr__(self) -> str:
@@ -166,21 +179,6 @@ def _apply_rotary_pos_embedding(array, sin, cos):
     return (array * cos[:, :, :sequence, :]) + (_rotate_half(array) * sin[:, :, :sequence, :])
 
 
-@partial(jax.jit, static_argnames=["runtime_dtype", "freqs_cis"])
-def rotary_embedding(
-        query: Array,
-        key: Array,
-        freqs_cis: FreqsCis,
-        position_ids: Array,
-        runtime_dtype: jnp.dtype = jnp.float16
-):
-    sin = freqs_cis.sin[position_ids][None, None, :, :]
-    cos = freqs_cis.cos[position_ids][None, None, :, :]
-    key = _apply_rotary_pos_embedding(key, sin=sin, cos=cos)
-    query = _apply_rotary_pos_embedding(query, sin=sin, cos=cos)
-    return query.astype(runtime_dtype), key.astype(runtime_dtype)
-
-
 @partial(
     jax.jit,  # Let XLA cache everything ...
     static_argnames=[
@@ -195,6 +193,7 @@ def rotary_embedding(
         "short_factor"
     ]
 )
+@functools.lru_cache()
 def precompute_freqs_cis(
         dim,
         max_position_embeddings=2048,
@@ -271,3 +270,18 @@ def precompute_freqs_cis(
         return FreqsCis(sin=sin[0], cos=cos[0])
 
     raise "wrong rope type has been given"
+
+
+@partial(jax.jit, static_argnames=["runtime_dtype", "freqs_cis"])
+def rotary_embedding(
+        query: Array,
+        key: Array,
+        freqs_cis: FreqsCis,
+        position_ids: Array,
+        runtime_dtype: jnp.dtype = jnp.float16
+):
+    sin = freqs_cis.sin[position_ids][None, None, :, :]
+    cos = freqs_cis.cos[position_ids][None, None, :, :]
+    key = _apply_rotary_pos_embedding(key, sin=sin, cos=cos)
+    query = _apply_rotary_pos_embedding(query, sin=sin, cos=cos)
+    return query.astype(runtime_dtype), key.astype(runtime_dtype)
