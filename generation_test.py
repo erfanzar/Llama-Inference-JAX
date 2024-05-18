@@ -17,7 +17,7 @@ def main():
         vocab_size=32000,
         hidden_size=256,
         intermediate_size=512,
-        num_hidden_layers=4,
+        num_hidden_layers=1,
         num_attention_heads=8,
         num_key_value_heads=2
     )
@@ -25,10 +25,10 @@ def main():
     lijax_model = convert_llama_model_weights_to_lijax(
         hf_model,
         None,
-        True,
-        True,
-        True,
-        True
+        False,
+        False,
+        False,
+        False
     )
     input_ids_torch = torch.tensor([1, 2, 3, 4, 5], dtype=torch.long).reshape(1, -1)
     input_ids_jax = pt2jax(input_ids_torch)
@@ -38,7 +38,7 @@ def main():
         max_new_tokens=max_new_tokens
     )
     print(res_torch)
-    llama_generate(
+    res_lijax = llama_generate(
         block=lijax_model,
         input_ids=input_ids_jax,
         max_new_tokens=max_new_tokens,
@@ -46,6 +46,7 @@ def main():
         use_flash_attention=False,
         runtime_kernel="normal"
     )
+    print(res_lijax)
     # print(res_torch)
     # res_lijax, new_key_values = forward_llama_lm_head(
     #     block=lijax_model,

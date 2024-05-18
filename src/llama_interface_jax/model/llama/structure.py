@@ -228,22 +228,36 @@ def forward_llama_attention(
 
         causal_mask = jax.lax.dynamic_slice(
             causal_mask,
-            (cur_index, 0), (query, past_key_values.key.shape[1])
+            (cur_index, 0),
+            (query_length, past_key_values.key.shape[1])
+        )[jnp.newaxis, jnp.newaxis, :, :]
+
+        causal_mask = jnp.broadcast_to(causal_mask, (batch_size,) + causal_mask.shape[1:])
+        attention_mask = jnp.broadcast_to(
+            jnp.expand_dims(
+                attention_mask, axis=(-3, -2)
+            ), causal_mask.shape
         )
+        attention_mask = jnp.logical_and(attention_mask, causal_mask)
 
         query = _c_axes(query)  # B H S D -> B S H D
         key = _c_axes(key)  # B H S D -> B S H D
         *batch_dims, max_length, num_heads, depth_per_head = past_key_values.value.shape
         indices = (0,) * len(batch_dims) + (cur_index, 0, 0)  # type:ignore
-        value = jax.lax.dynamic_update_slice(past_key_values.value, value, indices, )
+        value = jax.lax.dynamic_update_slice(past_key_values.value, value, indices)
         key = jax.lax.dynamic_update_slice(past_key_values.key, key, indices)
+        # jax.debug.print("JAX {x}", x=key.sum())
         num_updated_cache_vectors = query.shape[1]
+        pad_mask = jnp.broadcast_to(
+            jnp.arange(max_length) < cur_index + num_updated_cache_vectors,
+            tuple(batch_dims) + (1, num_updated_cache_vectors, max_length),
+        )
+        attention_mask = jnp.logical_and(pad_mask, attention_mask)
         new_past_key_values = KVMemory(
             key=key,
             value=value,
             step=cur_index + num_updated_cache_vectors,
         )
-        mask_made = jnp.arange(0, max_length) < (cur_index + num_updated_cache_vectors)
         query = _c_axes(query)  # B S H D -> B H S D
         key = _c_axes(key)  # B S H D -> B H S D
     else:
@@ -480,7 +494,9 @@ def forward_llama_lm_head(
         num_hidden_layers=config.num_hidden_layers,
         rope_theta=config.rope_theta,
     )
-    return block.lm_head(hidden_states, interpret=interpret, dtype=runtime_dtype, kernel=runtime_kernel), new_key_values
+    lm_head_out = block.lm_head(hidden_states, interpret=interpret, dtype=runtime_dtype, kernel=runtime_kernel)
+    # jax.debug.print("JAX LM OUT : {x}", x=lm_head_out[-1, -1, :].sum())
+    return lm_head_out, new_key_values
 
 
 def llama_generate(
@@ -513,7 +529,7 @@ def llama_generate(
             num_key_value_heads=block.config.num_key_value_heads,
             dtype=runtime_dtype,
             num_hidden_layers=block.config.num_hidden_layers,
-            sequence_length=max_length,
+            sequence_length=max_length - max_new_tokens,
             head_dims=block.config.hidden_size // block.config.num_attention_heads
         )
     if do_padding:
@@ -526,6 +542,7 @@ def llama_generate(
     else:
         assert attention_mask is not None, "attention_mask must be provided"
         assert position_ids is not None, "position_ids must be provided"
+    generated_ids = []
     for _ in range(max_new_tokens):
         logits, past_key_values = forward_llama_lm_head(
             block=block,
@@ -549,11 +566,11 @@ def llama_generate(
             top_k=top_k,
             top_p=top_p,
         )
-        print(next_token)
+        generated_ids.append(next_token)
         input_ids = next_token
         attention_mask = jnp.ones_like(next_token)
         position_ids = position_ids[:, -1:] + 1
-        input_ids, attention_mask, position_ids = map(
-            lambda x: x.astype("i4"),
-            [input_ids, attention_mask, position_ids]
-        )
+        input_ids, attention_mask, position_ids = map(lambda x: x.astype("i4"),
+                                                      [input_ids, attention_mask, position_ids])
+
+    return jnp.concatenate(generated_ids, -1)

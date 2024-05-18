@@ -49,7 +49,8 @@ def sample_next_token(
     """
 
     # Apply temperature scaling.
-    logits = logits / temperature
+    if do_sample:
+        logits = logits / temperature
 
     batch, seq, vocab_size = logits.shape
 
