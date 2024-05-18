@@ -5,7 +5,8 @@ from src.llama_interface_jax.model import (
     KVMemory,
     LlamaForCausalLMWeight,
 )
-from src.llama_interface_jax.generation import prepare_input, sample_token, SampleSettings
+from src.llama_interface_jax.generation import prepare_input, sample_next_token
+
 from src.llama_interface_jax.utils import GenerateRNG
 from jax import numpy as jnp
 
@@ -14,7 +15,7 @@ rng = GenerateRNG()
 
 def main():
     batch_size = 1
-    max_sequence_length = 64
+    max_sequence_length = 32
     block: LlamaForCausalLMWeight = pickle.load(open("lijax_llama_model.pkl", "rb"))
     input_ids = jnp.array([1, 2, 3, 4, 5, 6, ], dtype="i4").reshape(1, -1)
     input_ids, attention_mask = prepare_input(input_ids, max_sequence_length)
@@ -29,19 +30,13 @@ def main():
     res, memory = forward_llama_lm_head(
         block=block,
         input_ids=input_ids,
+        attention_mask=attention_mask,
         runtime_kernel="normal",
-        use_flash_attention=False
-        # past_key_values=memory
+        use_flash_attention=False,
+        past_key_values=memory
     )
-    out = sample_token(
-        rng.rng,
-        res,
-        SampleSettings(
-            temperature=jnp.array([0.4]),
-            mask=attention_mask,
-            nucleus_p=jnp.array([0.95]),
-            active=jnp.array([True])
-        )
+    out = sample_next_token(
+        res, rng.rng, 0.8, 0.95, 20
     )
     print(res)
     print(out)

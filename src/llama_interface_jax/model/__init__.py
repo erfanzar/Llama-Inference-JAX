@@ -6,7 +6,8 @@ from .llama.structure import (
     LlamaAttentionWeights as LlamaAttentionWeights,
     LlamaRMSNorm as LlamaRMSNorm,
     LiJAXLlamaConfig as LiJAXLlamaConfig,
-    forward_llama_lm_head as forward_llama_lm_head
+    forward_llama_lm_head as forward_llama_lm_head,
+    llama_generate as llama_generate
 )
 from ._modules import (
     LiJAXLinear as LiJAXLinear,
@@ -25,5 +26,6 @@ __all__ = (
     "LiJAXLinear",
     "LiJAXEmbed",
     "forward_llama_lm_head",
-    "KVMemory"
+    "KVMemory",
+    "llama_generate"
 )

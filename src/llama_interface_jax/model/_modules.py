@@ -127,7 +127,7 @@ class LiJAXEmbed(NamedTuple):
 class KVMemory(NamedTuple):
     key: Array
     value: Array
-    step: Array
+    step: Optional[Array]
 
     @classmethod
     def init_memory(
@@ -137,12 +137,11 @@ class KVMemory(NamedTuple):
             head_dims: int,
             num_key_value_heads: int,
             dtype=jnp.bfloat16,
-            step: Optional[Array] = None
     ) -> "KVMemory":  # type:ignore
         return cls(
             key=jnp.zeros((batch_size, sequence_length, num_key_value_heads, head_dims), dtype=dtype),
             value=jnp.zeros((batch_size, sequence_length, num_key_value_heads, head_dims), dtype=dtype),
-            step=step or jnp.zeros((batch_size, 1), dtype="i4")
+            step=jnp.array(0, dtype="i4")
         )
 
     @classmethod
@@ -154,13 +153,12 @@ class KVMemory(NamedTuple):
             num_key_value_heads: int,
             num_hidden_layers: int,
             dtype=jnp.bfloat16,
-            step: Optional[Array] = None
     ) -> "List[KVMemory]":  # type:ignore
         return [
             cls(
                 key=jnp.zeros((batch_size, sequence_length, num_key_value_heads, head_dims), dtype=dtype),
                 value=jnp.zeros((batch_size, sequence_length, num_key_value_heads, head_dims), dtype=dtype),
-                step=step or jnp.zeros((batch_size, 1), dtype="i4")
+                step=jnp.array(0, dtype="i4")
             ) for _ in range(num_hidden_layers)
         ]
 
@@ -280,8 +278,12 @@ def rotary_embedding(
         position_ids: Array,
         runtime_dtype: jnp.dtype = jnp.float16
 ):
-    sin = freqs_cis.sin[position_ids][None, None, :, :]
-    cos = freqs_cis.cos[position_ids][None, None, :, :]
+    def _gather_embeddings(idx):
+        return freqs_cis.sin[idx], freqs_cis.cos[idx]
+
+    # sin, cos = freqs_cis.sin[position_ids][None, None, :, :], freqs_cis.cos[position_ids][None, None, :, :]
+    sin, cos = jax.vmap(_gather_embeddings, in_axes=0, out_axes=0)(position_ids)
+    sin, cos = jnp.expand_dims(sin, 1), jnp.expand_dims(cos, 1)
     key = _apply_rotary_pos_embedding(key, sin=sin, cos=cos)
     query = _apply_rotary_pos_embedding(query, sin=sin, cos=cos)
     return query.astype(runtime_dtype), key.astype(runtime_dtype)

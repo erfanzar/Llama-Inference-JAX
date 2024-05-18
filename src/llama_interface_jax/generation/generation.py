@@ -14,76 +14,70 @@ from jax.sharding import PartitionSpec
 from jax.typing import ArrayLike
 
 
-class SampleSettings(NamedTuple):
-    temperature: ArrayLike
-    nucleus_p: ArrayLike
-    mask: ArrayLike
-    active: ArrayLike
-
-
-class SampleOutput(NamedTuple):
-    token_id: ArrayLike
-    prob: ArrayLike
-    top_k_token_ids: ArrayLike
-    top_k_probs: ArrayLike
-
-
 def prepare_input(input_ids, max_length):
     pad_width = max_length - input_ids.shape[1]
     if pad_width > 0:
         return (
-            jnp.pad(input_ids, [(0, 0), (0, pad_width)]),
+            jnp.pad(input_ids, [(0, 0), (pad_width, 0)]),
             jnp.ones((input_ids.shape[0], max_length)).at[:, :pad_width].set(0)
         )
     else:
         return input_ids[:, abs(pad_width):, :, :], jnp.ones((input_ids.shape[0], max_length))
 
 
-def top_p_filter(logits: jax.Array, top_p: jax.Array) -> jax.Array:
-    """Performs nucleus filtering on logits."""
-    assert logits.ndim == top_p.ndim, f"Expected {logits.ndim} equal {top_p.ndim}"
-    sorted_logits = jax.lax.sort(logits, is_stable=False)
-    sorted_probs = jax.nn.softmax(sorted_logits)
-    threshold_idx = jnp.argmax(jnp.cumsum(sorted_probs, -1) >= 1 - top_p, axis=-1)
-    threshold_largest_logits = jnp.take_along_axis(
-        sorted_logits, threshold_idx[..., jnp.newaxis], axis=-1
-    )
-    assert threshold_largest_logits.shape == logits.shape[:-1] + (1,)
-    mask = logits >= threshold_largest_logits
-    logits = jnp.where(mask, logits, -1e10)
-    return logits
-
-
-def sample_token(
-        rngs: jax.random.PRNGKey,
+def sample_next_token(
         logits,
-        settings: SampleSettings,
-) -> SampleOutput:
-    # Expand the settings shape to match the logit shape.
-    settings = SampleSettings(
-        temperature=jnp.expand_dims(settings.temperature, (1, 2)),  # Input [B], output [B, 1, 1].
-        nucleus_p=jnp.expand_dims(settings.nucleus_p, (1, 2)),  # Input [B], output [B, 1, 1].
-        mask=jnp.expand_dims(settings.mask, -1),
-        active=settings.active,  # [B].
-    )
-    logits = logits / settings.temperature.astype(logits.dtype)
-    # Mask out all disallowed tokens by assigning them a near-zero probability.
-    logits = jnp.where(settings.mask, logits, -1e10)
-    # Mask out all tokens that don't fall into the p-th percentile.
-    logits = top_p_filter(logits, settings.nucleus_p.astype(logits.dtype))
+        rng: jax.random.PRNGKey,
+        temperature=1.0,
+        top_p=1.0,
+        top_k=0,
+        do_sample: bool = True
+):
+    """
+    Applies temperature, top-p, and top-k filtering to logits and samples the next token.
 
-    new_token = jax.random.categorical(rngs, logits, axis=-1)
-    probabilities = jax.nn.softmax(logits)
-    token_prob = jnp.take_along_axis(probabilities, jnp.expand_dims(new_token, 1), axis=2)
-    token_prob = jnp.squeeze(token_prob, 1)
+    Args:
+      logits: Logits predicted by the model, shape (batch, seq, vocab_size).
+      rng: jax.random.PRNGKey
+      temperature: Temperature for scaling the logits.
+      top_p: Top-p probability threshold for filtering logits.
+      top_k: Top-k number of logits to keep after filtering by probability.
+      do_sample: boolean indicating whether to sample a new token or not
 
-    # Gather the top-k tokens and probabilities.
-    top_k_probs, top_k_token_ids = jax.lax.top_k(probabilities, 10)
-    top_k_probs = jnp.squeeze(top_k_probs, 1)
-    top_k_token_ids = jnp.squeeze(top_k_token_ids, 1)
-    return SampleOutput(
-        new_token,
-        token_prob,
-        top_k_token_ids,
-        top_k_probs,
-    )
+    Returns:
+      Sampled tokens, shape (batch,).
+    """
+
+    # Apply temperature scaling.
+    logits = logits / temperature
+
+    batch, seq, vocab_size = logits.shape
+
+    # Apply top-p filtering.
+    if top_p < 1.0 and do_sample:
+        sorted_logits = jnp.sort(logits, axis=-1)[..., ::-1]
+        sorted_probs = jax.nn.softmax(sorted_logits, axis=-1)
+        cumulative_probs = jnp.cumsum(sorted_probs, axis=-1)
+
+        # Create a mask for logits exceeding the top-p threshold.
+        cutoff_index = jnp.argmax(cumulative_probs >= top_p, axis=-1)
+        cutoff_index = jnp.expand_dims(cutoff_index, axis=-1)
+        cutoff_mask = jnp.arange(vocab_size) < cutoff_index
+
+        # Mask logits exceeding the top-p threshold.
+        logits = jnp.where(cutoff_mask, logits, jnp.full_like(logits, float('-inf')))
+
+    # Apply top-k filtering.
+    if top_k > 0 and do_sample:
+        top_k_logits, top_k_indices = jax.lax.top_k(logits, k=top_k)
+        top_k_mask = jnp.zeros_like(logits, dtype=bool)
+        top_k_mask = top_k_mask.at[jnp.arange(batch)[:, None], jnp.arange(seq)[:, None], top_k_indices].set(True)
+
+        # Mask logits outside the top-k.
+        logits = jnp.where(top_k_mask, logits, jnp.full_like(logits, float('-inf')))
+
+    # Sample from the filtered logits.
+    probs = jax.nn.softmax(logits, axis=-1)
+    if do_sample:
+        return jnp.atleast_2d(jax.random.categorical(rng, probs)[:, -1])
+    return jnp.atleast_2d(jnp.argmax(probs, -1)[:, -1])
