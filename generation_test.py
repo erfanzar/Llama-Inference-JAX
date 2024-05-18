@@ -32,17 +32,19 @@ def main():
     )
     input_ids_torch = torch.tensor([1, 2, 3, 4, 5], dtype=torch.long).reshape(1, -1)
     input_ids_jax = pt2jax(input_ids_torch)
-
+    max_new_tokens = 2
     res_torch = hf_model.generate(
         input_ids_torch,
-        max_new_tokens=2
+        max_new_tokens=max_new_tokens
     )
     print(res_torch)
     llama_generate(
         block=lijax_model,
         input_ids=input_ids_jax,
-        max_new_tokens=512,
-        max_length=512 + 32
+        max_new_tokens=max_new_tokens,
+        max_length=max_new_tokens + 32,
+        use_flash_attention=False,
+        runtime_kernel="normal"
     )
     # print(res_torch)
     # res_lijax, new_key_values = forward_llama_lm_head(

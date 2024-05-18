@@ -226,33 +226,11 @@ def forward_llama_attention(
     if past_key_values is not None:
         cur_index = past_key_values.step
 
-        def _get_first_role_mask(inner_causal_mask, inner_attention_mask):
-            inner_causal_mask = inner_causal_mask[jnp.newaxis, jnp.newaxis, :query_length, :key_length]
-            inner_causal_mask = jnp.broadcast_to(inner_causal_mask, (batch_size,) + inner_causal_mask.shape[1:])
-            inner_attention_mask = jnp.broadcast_to(
-                jnp.expand_dims(
-                    inner_attention_mask, axis=(-3, -2)
-                ), inner_causal_mask.shape
-            )
-            return jnp.logical_and(inner_attention_mask, inner_causal_mask)
+        causal_mask = jax.lax.dynamic_slice(
+            causal_mask,
+            (cur_index, 0), (query, past_key_values.key.shape[1])
+        )
 
-        def _get_next_role_mask(inner_causal_mask, inner_attention_mask):
-
-            inner_causal_mask = jax.lax.dynamic_slice(inner_causal_mask, (cur_index, 0),
-                                                      (query_length, past_key_values.key.shape[1])
-                                                      )[jnp.newaxis, jnp.newaxis, :, :]
-            inner_causal_mask = jnp.broadcast_to(inner_causal_mask, (batch_size,) + inner_causal_mask.shape[1:])
-            inner_attention_mask = jnp.broadcast_to(jnp.expand_dims(inner_attention_mask, axis=(-3, -2)),
-                                                    inner_causal_mask.shape)
-            return jnp.logical_and(inner_attention_mask, inner_causal_mask)
-
-        # attention_mask = jax.lax.cond(
-        #     past_key_values.step == 0,
-        #     _get_first_role_mask,
-        #     _get_next_role_mask,
-        #     causal_mask, attention_mask
-        # )
-        attention_mask = _get_first_role_mask(causal_mask, attention_mask)
         query = _c_axes(query)  # B H S D -> B S H D
         key = _c_axes(key)  # B H S D -> B S H D
         *batch_dims, max_length, num_heads, depth_per_head = past_key_values.value.shape
@@ -260,16 +238,12 @@ def forward_llama_attention(
         value = jax.lax.dynamic_update_slice(past_key_values.value, value, indices, )
         key = jax.lax.dynamic_update_slice(past_key_values.key, key, indices)
         num_updated_cache_vectors = query.shape[1]
-        pad_mask = jnp.broadcast_to(
-            jnp.arange(max_length) < cur_index + num_updated_cache_vectors,
-            tuple(batch_dims) + (1, num_updated_cache_vectors, max_length),
-        )
-        attention_mask = jnp.logical_and(pad_mask[:, :, :, :attention_mask.shape[-1]], attention_mask)
         new_past_key_values = KVMemory(
             key=key,
             value=value,
             step=cur_index + num_updated_cache_vectors,
         )
+        mask_made = jnp.arange(0, max_length) < (cur_index + num_updated_cache_vectors)
         query = _c_axes(query)  # B S H D -> B H S D
         key = _c_axes(key)  # B S H D -> B H S D
     else:
@@ -575,7 +549,7 @@ def llama_generate(
             top_k=top_k,
             top_p=top_p,
         )
-        # print(next_token)
+        print(next_token)
         input_ids = next_token
         attention_mask = jnp.ones_like(next_token)
         position_ids = position_ids[:, -1:] + 1
