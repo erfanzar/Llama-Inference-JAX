@@ -26,7 +26,35 @@ learning tasks, and integrating them with JAX allows for seamless deployment on 
 
 ## Usage
 
-_Process is still under progress ..._
+##### Converting Your Own Llama Model to LiJAX as easy as possible
+
+```python
+from lijax.covertors import convert_llama_model
+import pickle as pkl
+
+lijax_model = convert_llama_model(
+    pre_trained_model_name_or_path="meta-llama/Meta-Llama-3-8B-Instruct",
+    extra_loading_options_for_model=dict(),  # Kwargs to hf model loading
+    quantize_mlp=True,
+    quantize_embed=True,
+    quantize_lm_head=True,
+    quantize_self_attn=True
+)
+
+print(lijax_model)
+
+# Saving Model 
+
+pkl.dump(lijax_model, open("lijax_llama_3_8b", "wb"))
+
+# Loading Saved Model 
+
+_new_lijax_model = pkl.load(open("lijax_llama_3_8b", "rb"))
+```
+
+#### Generation Process
+
+
 
 ## License
 

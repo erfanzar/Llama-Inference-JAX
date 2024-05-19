@@ -22,7 +22,7 @@ def prepare_input(input_ids, max_length):
             jnp.ones((input_ids.shape[0], max_length)).at[:, :pad_width].set(0)
         )
     else:
-        return input_ids[:, abs(pad_width):, :, :], jnp.ones((input_ids.shape[0], max_length))
+        return input_ids[:, abs(pad_width):], jnp.ones((input_ids.shape[0], max_length))
 
 
 def sample_next_token(

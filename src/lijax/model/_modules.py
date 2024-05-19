@@ -4,6 +4,7 @@ import math
 import jax
 from jax import numpy as jnp, Array
 from ..ops import matmul, un_quantize_array, pt2jax, quantize_array
+from ..sharding import with_sharding_constraint, check_sharding
 from functools import partial
 
 
@@ -83,6 +84,26 @@ class LiJAXLinear(NamedTuple):
             bias=None if bias is None else pt2jax(bias)
         )
 
+    def shard(self, mesh):
+
+        with mesh:
+            self.weight = with_sharding_constraint(self.weight, check_sharding(mesh, self.weight))
+            if self.weight_scale is not None:
+                self.weight_scale = with_sharding_constraint(
+                    self.weight_scale,
+                    check_sharding(mesh, self.weight_scale)
+                )
+            if self.bias is not None:
+                self.bias = with_sharding_constraint(
+                    self.bias,
+                    check_sharding(mesh, self.bias)
+                )
+            if self.bias_scale is not None:
+                self.bias_scale = with_sharding_constraint(
+                    self.bias_scale,
+                    check_sharding(mesh, self.bias_scale)
+                )
+
 
 class LiJAXEmbed(NamedTuple):
     embedding: Array
@@ -122,6 +143,15 @@ class LiJAXEmbed(NamedTuple):
             embedding=embedding,
             embedding_scale=embedding_scale,
         )
+
+    def shard(self, mesh):
+        with mesh:
+            self.embedding = with_sharding_constraint(self.embedding, check_sharding(mesh, self.embedding))
+            if self.embedding_scale is not None:
+                self.embedding_scale = with_sharding_constraint(
+                    self.embedding_scale,
+                    check_sharding(mesh, self.embedding_scale)
+                )
 
 
 class KVMemory(NamedTuple):

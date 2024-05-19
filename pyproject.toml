@@ -1,0 +1,46 @@
+[project]
+name = "Llama-Inference-JAX"
+authors = [
+    { name = "Erfan Zare Chavoshi", email = "Erfanzare810@gmail.com" }
+]
+requires-python = ">=3.8"
+readme = "README.md"
+version = "0.0.0"
+
+dependencies = ["chex>=0.1.7", "typing~=3.7.4.3", "jax>=0.4.28", "jaxlib>=0.4.28", ]
+
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Developers",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+    "License :: OSI Approved :: Apache Software License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.8",
+    "Programming Language :: Python :: 3.9",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+]
+description = "Accelerated inference with Llama Models in JAX for high-speed, pure JAX implementation."
+
+license = { text = "Apache-2.0" }
+
+keywords = [
+    "JAX", "Deep Learning", "Machine Learning", "XLA"
+]
+
+
+[build-system]
+requires = ["setuptools>=46.4.0", "wheel>=0.34.2"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages]
+find = { where = ["src"] }
+
+
+[project.urls]
+
+Homepage = "https://github.com/erfanzar/Llama-Inference-JAX"
+Issues = "https://github.com/erfanzar/Llama-Inference-JAX/issues"
+Documentation = "https://erfanzar.github.io/Llama-Inference-JAX"

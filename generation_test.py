@@ -1,9 +1,9 @@
 import jax.random
 
-from src.llama_interface_jax.generation import prepare_input, sample_next_token
-from src.llama_interface_jax.model import LlamaForCausalLMWeight, forward_llama_lm_head, KVMemory, llama_generate
-from src.llama_interface_jax.ops import pt2jax
-from src.llama_interface_jax.covertors import convert_llama_model_weights_to_lijax
+from src.lijax.generation import prepare_input, sample_next_token
+from src.lijax.model import LlamaForCausalLMWeight, forward_llama_lm_head, KVMemory, llama_generate
+from src.lijax.ops import pt2jax
+from src.lijax.covertors import convert_llama_model_weights_to_lijax
 from transformers import LlamaConfig, LlamaForCausalLM
 from torch import nn
 import torch
@@ -25,28 +25,35 @@ def main():
     lijax_model = convert_llama_model_weights_to_lijax(
         hf_model,
         None,
-        False,
-        False,
-        False,
-        False
+        True,
+        True,
+        True,
+        True
     )
-    input_ids_torch = torch.tensor([1, 2, 3, 4, 5], dtype=torch.long).reshape(1, -1)
-    input_ids_jax = pt2jax(input_ids_torch)
-    max_new_tokens = 2
+    input_ids_jax = jnp.array([[1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 648, 6541]], dtype="i4")
+    max_new_tokens = 32
+    max_seq = max_new_tokens + 8
+    input_ids_jax, attention_mask_jax = prepare_input(input_ids=input_ids_jax, max_length=5)
+    input_ids_torch, attention_mask_torch = torch.tensor(input_ids_jax.tolist()), torch.tensor(
+        attention_mask_jax.tolist()
+    )
     res_torch = hf_model.generate(
         input_ids_torch,
+        attention_mask=attention_mask_torch,
         max_new_tokens=max_new_tokens
     )
     print(res_torch)
-    res_lijax = llama_generate(
-        block=lijax_model,
-        input_ids=input_ids_jax,
-        max_new_tokens=max_new_tokens,
-        max_length=max_new_tokens + 32,
-        use_flash_attention=False,
-        runtime_kernel="normal"
-    )
-    print(res_lijax)
+    for nt in llama_generate(
+            block=lijax_model,
+            input_ids=input_ids_jax,
+            attention_mask=attention_mask_jax.astype("i4"),
+            max_new_tokens=max_new_tokens,
+            max_length=max_new_tokens + 32,
+            use_flash_attention=False,
+            runtime_kernel="normal",
+            do_padding=False,
+    ):
+        print(nt)
     # print(res_torch)
     # res_lijax, new_key_values = forward_llama_lm_head(
     #     block=lijax_model,
