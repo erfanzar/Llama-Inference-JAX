@@ -60,8 +60,8 @@ _new_lijax_model.shard()  # sharding model is optional across available GPUs,TPU
 ```python
 import jax.numpy
 from transformers import AutoTokenizer
-from src.lijax.model import llama_generate
-from src.lijax.covertors import convert_llama_model
+from lijax.model import llama_generate
+from lijax.covertors import convert_llama_model
 
 tokenizer = AutoTokenizer.from_pretrained("meta-llama/Meta-Llama-3-8B-Instruct")
 lijax_model = convert_llama_model("meta-llama/Meta-Llama-3-8B-Instruct")
