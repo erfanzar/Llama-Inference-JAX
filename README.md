@@ -63,8 +63,8 @@ from transformers import AutoTokenizer
 from src.lijax.model import llama_generate
 from src.lijax.covertors import convert_llama_model
 
-tokenizer = AutoTokenizer.from_pretrained("jan-hq/LlamaCorn-1.1B-Chat")  # AnyLlama or Mistral Based Model
-lijax_model = convert_llama_model("jan-hq/LlamaCorn-1.1B-Chat")  # AnyLlama or Mistral Based Model
+tokenizer = AutoTokenizer.from_pretrained("meta-llama/Meta-Llama-3-8B-Instruct")
+lijax_model = convert_llama_model("meta-llama/Meta-Llama-3-8B-Instruct")
 lijax_model.shard()
 generated_ids = None
 printed_length = 0
