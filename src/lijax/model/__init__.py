@@ -4,7 +4,7 @@ from .llama.structure import (
     LlamaForCausalLMWeight as LlamaForCausalLMWeight,
     LlamaMLPWeights as LlamaMLPWeights,
     LlamaAttentionWeights as LlamaAttentionWeights,
-    LlamaRMSNorm as LlamaRMSNorm,
+    LiJAXRMSNorm as LiJAXRMSNorm,
     LiJAXLlamaConfig as LiJAXLlamaConfig,
     forward_llama_lm_head as forward_llama_lm_head,
     llama_generate as llama_generate
@@ -21,7 +21,7 @@ __all__ = (
     "LlamaForCausalLMWeight",
     "LlamaMLPWeights",
     "LlamaAttentionWeights",
-    "LlamaRMSNorm",
+    "LiJAXRMSNorm",
     "LiJAXLlamaConfig",
     "LiJAXLinear",
     "LiJAXEmbed",

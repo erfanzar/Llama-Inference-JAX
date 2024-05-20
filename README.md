@@ -23,6 +23,7 @@ learning tasks, and integrating them with JAX allows for seamless deployment on 
 - Parameter Quantization.
 - Standalone weights.
 - Flash Attention Support on CPU/GPU/TPU.
+- PyTrees and JAX compatible Blocks for Model.
 
 ## Usage
 
@@ -40,6 +41,7 @@ lijax_model = convert_llama_model(
     quantize_lm_head=True,
     quantize_self_attn=True
 )
+lijax_model.shard()
 
 print(lijax_model)
 
@@ -50,11 +52,49 @@ pkl.dump(lijax_model, open("lijax_llama_3_8b", "wb"))
 # Loading Saved Model 
 
 _new_lijax_model = pkl.load(open("lijax_llama_3_8b", "rb"))
+_new_lijax_model.shard()  # sharding model is optional across available GPUs,TPUs
 ```
 
 #### Generation Process
 
+```python
+import jax.numpy
+from transformers import AutoTokenizer
+from src.lijax.model import llama_generate
+from src.lijax.covertors import convert_llama_model
 
+tokenizer = AutoTokenizer.from_pretrained("jan-hq/LlamaCorn-1.1B-Chat")  # AnyLlama or Mistral Based Model
+lijax_model = convert_llama_model("jan-hq/LlamaCorn-1.1B-Chat")  # AnyLlama or Mistral Based Model
+lijax_model.shard()
+generated_ids = None
+printed_length = 0
+for token in llama_generate(
+        block=lijax_model,
+        input_ids=tokenizer.apply_chat_template(
+            [
+                {"role": "user", "content": "hi"}
+            ],
+            tokenize=True,
+            add_generation_prompt=True,
+            return_tensors="np"
+        ),
+        use_flash_attention=False,
+        # runtime_kernel="pallas",
+        runtime_kernel="normal",
+        max_length=2048,
+        max_new_tokens=32,
+        eos_token_id=tokenizer.eos_token_id,
+        temperature=1.6,
+        # do_sample=True,
+        top_k=20,
+        top_p=0.95,
+):
+    generated_ids = jax.numpy.concatenate([generated_ids, token], -1) if generated_ids is not None else token
+    stream = tokenizer.decode(generated_ids[0].tolist(), skip_special_tokens=False)
+    print(stream[printed_length:], end="")
+    printed_length = len(stream)
+
+```
 
 ## License
 

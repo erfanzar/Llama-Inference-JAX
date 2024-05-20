@@ -1,10 +1,11 @@
+from dataclasses import dataclass
 import functools
 from typing import NamedTuple, Optional, List, Literal
 import math
 import jax
-from jax import numpy as jnp, Array
+from jax import numpy as jnp, Array, tree, tree_util
 from ..ops import matmul, un_quantize_array, pt2jax, quantize_array
-from ..sharding import with_sharding_constraint, check_sharding
+from ..sharding import check_sharding, apply_sharding
 from functools import partial
 
 
@@ -13,12 +14,77 @@ class FreqsCis(NamedTuple):
     cos: Array
 
 
-class LiJAXLinear(NamedTuple):
+@tree_util.register_pytree_node_class
+@dataclass
+class LiJAXRMSNorm:
+    weight: Array
+    weight_scale: Optional[Array] = None
+
+    def tree_flatten(self):
+        children = (self.weight, self.weight_scale)
+        aux_data = {}  # No additional metadata needed
+        return children, aux_data
+
+    @classmethod
+    def tree_unflatten(cls, aux_data, children):
+        weight, weight_scale = children
+        return cls(weight, weight_scale)
+
+    def __repr__(self) -> str:
+        return (
+            f"{self.__class__.__name__}(shape = ({self.weight.shape},), quantized = {self.weight_scale is not None})"
+        )
+
+    @partial(jax.jit, static_argnames=["eps", "dtype"])
+    def __call__(self, x: Array, eps: float = 1e-6, dtype: jnp.dtype = jnp.float16) -> Array:
+        x = x.astype("float32")
+        norm = x * jax.lax.rsqrt(jnp.square(x).mean(-1, keepdims=True) + eps)
+        weight = self.weight
+        if self.weight_scale is not None:
+            weight = un_quantize_array(quantized=weight, scale=self.weight_scale, float_dtype=dtype)
+        weight = weight.astype(dtype)
+        norm = norm.astype(dtype)
+        return weight * norm
+
+    @classmethod
+    def from_torch(cls, head_module, quantize: bool = False):
+        weight = pt2jax(head_module.weight)
+        weight_scale = None
+        if quantize:
+            weight, weight_scale = quantize_array(weight)
+        return cls(
+            weight=weight,
+            weight_scale=weight_scale,
+        )
+
+    def shard(self, mesh):
+
+        with mesh:
+            self.weight = apply_sharding(self.weight, check_sharding(mesh, self.weight))
+            if self.weight_scale is not None:
+                self.weight_scale = apply_sharding(
+                    self.weight_scale,
+                    check_sharding(mesh, self.weight_scale)
+                )
+
+
+@tree_util.register_pytree_node_class
+@dataclass
+class LiJAXLinear:
     weight: Array
     bias: Optional[Array] = None
-
     weight_scale: Optional[Array] = None
     bias_scale: Optional[Array] = None
+
+    def tree_flatten(self):
+        children = (self.weight, self.bias, self.weight_scale, self.bias_scale)
+        aux_data = {}  # No additional metadata needed
+        return children, aux_data
+
+    @classmethod
+    def tree_unflatten(cls, aux_data, children):
+        weight, bias, weight_scale, bias_scale = children
+        return cls(weight, bias, weight_scale, bias_scale)
 
     @partial(jax.jit, static_argnames=["kernel", "interpret", "block_size", "dtype"])
     def __call__(
@@ -87,27 +153,39 @@ class LiJAXLinear(NamedTuple):
     def shard(self, mesh):
 
         with mesh:
-            self.weight = with_sharding_constraint(self.weight, check_sharding(mesh, self.weight))
+            self.weight = apply_sharding(self.weight, check_sharding(mesh, self.weight))
             if self.weight_scale is not None:
-                self.weight_scale = with_sharding_constraint(
+                self.weight_scale = apply_sharding(
                     self.weight_scale,
                     check_sharding(mesh, self.weight_scale)
                 )
             if self.bias is not None:
-                self.bias = with_sharding_constraint(
+                self.bias = apply_sharding(
                     self.bias,
                     check_sharding(mesh, self.bias)
                 )
             if self.bias_scale is not None:
-                self.bias_scale = with_sharding_constraint(
+                self.bias_scale = apply_sharding(
                     self.bias_scale,
                     check_sharding(mesh, self.bias_scale)
                 )
 
 
-class LiJAXEmbed(NamedTuple):
+@tree_util.register_pytree_node_class
+@dataclass
+class LiJAXEmbed:
     embedding: Array
     embedding_scale: Optional[Array] = None
+
+    def tree_flatten(self):
+        children = (self.embedding, self.embedding_scale)
+        aux_data = {}  # No additional metadata needed
+        return children, aux_data
+
+    @classmethod
+    def tree_unflatten(cls, aux_data, children):
+        embedding, embedding_scale = children
+        return cls(embedding, embedding_scale)
 
     @partial(jax.jit, static_argnames=["dtype"])
     def __call__(
@@ -146,18 +224,30 @@ class LiJAXEmbed(NamedTuple):
 
     def shard(self, mesh):
         with mesh:
-            self.embedding = with_sharding_constraint(self.embedding, check_sharding(mesh, self.embedding))
+            self.embedding = apply_sharding(self.embedding, check_sharding(mesh, self.embedding))
             if self.embedding_scale is not None:
-                self.embedding_scale = with_sharding_constraint(
+                self.embedding_scale = apply_sharding(
                     self.embedding_scale,
                     check_sharding(mesh, self.embedding_scale)
                 )
 
 
-class KVMemory(NamedTuple):
+@tree_util.register_pytree_node_class
+@dataclass
+class KVMemory:
     key: Array
     value: Array
     step: Optional[Array]
+
+    def tree_flatten(self):
+        children = (self.key, self.value, self.step)
+        aux_data = {}  # No additional metadata needed
+        return children, aux_data
+
+    @classmethod
+    def tree_unflatten(cls, aux_data, children):
+        key, value, step = children
+        return cls(key, value, step)
 
     @classmethod
     def init_memory(

@@ -1,5 +1,5 @@
 import math
-from typing import NamedTuple, Optional, List, Union, Dict, Tuple, Literal, Generator
+from typing import Optional, List, Union, Dict, Tuple, Literal, Generator, NamedTuple
 from functools import partial
 import jax.lax
 from jax import numpy as jnp, Array
@@ -16,11 +16,13 @@ from ...utils import GenerateRNG
 from .._modules import (
     LiJAXLinear,
     LiJAXEmbed,
+    LiJAXRMSNorm,
     FreqsCis,
     rotary_embedding,
     KVMemory,
     precompute_freqs_cis
 )
+from ...sharding import get_mesh, Mesh
 from ...generation import sample_next_token, prepare_input
 
 
@@ -52,11 +54,20 @@ class LiJAXLlamaConfig:
     chat_template: Optional[str] = None
 
 
-class LlamaAttentionWeights(NamedTuple):
+@jax.tree_util.register_pytree_node_class
+@dataclass
+class LlamaAttentionWeights:
     q_proj: LiJAXLinear
     k_proj: LiJAXLinear
     v_proj: LiJAXLinear
     o_proj: LiJAXLinear
+
+    def tree_flatten(self):
+        return (self.q_proj, self.k_proj, self.v_proj, self.o_proj), {}
+
+    @classmethod
+    def tree_unflatten(cls, aux_data, children):
+        return cls(*children)
 
     def __repr__(self) -> str:
         return (
@@ -68,12 +79,26 @@ class LlamaAttentionWeights(NamedTuple):
             f")"
         )
 
+    def shard(self, mesh: Mesh = get_mesh((1, -1))):
+        self.q_proj.shard(mesh=mesh)
+        self.k_proj.shard(mesh=mesh)
+        self.v_proj.shard(mesh=mesh)
+        self.o_proj.shard(mesh=mesh)
 
-class LlamaMLPWeights(NamedTuple):
-    # Llama MLP don't use Bias
+
+@jax.tree_util.register_pytree_node_class
+@dataclass
+class LlamaMLPWeights:
     gate_proj: LiJAXLinear
     down_proj: LiJAXLinear
     up_proj: LiJAXLinear
+
+    def tree_flatten(self):
+        return (self.gate_proj, self.down_proj, self.up_proj), {}
+
+    @classmethod
+    def tree_unflatten(cls, aux_data, children):
+        return cls(*children)
 
     def __repr__(self) -> str:
         return (
@@ -84,44 +109,26 @@ class LlamaMLPWeights(NamedTuple):
             f")"
         )
 
-
-class LlamaRMSNorm(NamedTuple):
-    weight: Array
-    weight_scale: Optional[Array] = None
-
-    def __repr__(self) -> str:
-        return (
-            f"{self.__class__.__name__}(shape = ({self.weight.shape},), quantized = {self.weight_scale is not None})"
-        )
-
-    @partial(jax.jit, static_argnames=["eps", "dtype"])
-    def __call__(self, x: Array, eps: float = 1e-6, dtype: jnp.dtype = jnp.float16) -> Array:
-        x = x.astype("float32")
-        norm = x * jax.lax.rsqrt(jnp.square(x).mean(-1, keepdims=True) + eps)
-        weight = self.weight
-        if self.weight_scale is not None:
-            weight = un_quantize_array(quantized=weight, scale=self.weight_scale, float_dtype=dtype)
-        weight = weight.astype(dtype)
-        norm = norm.astype(dtype)
-        return weight * norm
-
-    @classmethod
-    def from_torch(cls, head_module, quantize: bool = False):
-        weight = pt2jax(head_module.weight)
-        weight_scale = None
-        if quantize:
-            weight, weight_scale = quantize_array(weight)
-        return cls(
-            weight=weight,
-            weight_scale=weight_scale,
-        )
+    def shard(self, mesh: Mesh = get_mesh((1, -1))):
+        self.gate_proj.shard(mesh=mesh)
+        self.down_proj.shard(mesh=mesh)
+        self.up_proj.shard(mesh=mesh)
 
 
-class LlamaBlockWeight(NamedTuple):
+@jax.tree_util.register_pytree_node_class
+@dataclass
+class LlamaBlockWeight:
     mlp: LlamaMLPWeights
     self_attn: LlamaAttentionWeights
-    input_layer_norm: LlamaRMSNorm
-    post_attention_layer_norm: LlamaRMSNorm
+    input_layer_norm: LiJAXRMSNorm
+    post_attention_layer_norm: LiJAXRMSNorm
+
+    def tree_flatten(self):
+        return (self.mlp, self.self_attn, self.input_layer_norm, self.post_attention_layer_norm), {}
+
+    @classmethod
+    def tree_unflatten(cls, aux_data, children):
+        return cls(*children)
 
     def __repr__(self) -> str:
         return (
@@ -133,11 +140,26 @@ class LlamaBlockWeight(NamedTuple):
             f")"
         )
 
+    def shard(self, mesh: Mesh = get_mesh((1, -1))):
+        self.mlp.shard(mesh=mesh)
+        self.self_attn.shard(mesh=mesh)
+        self.input_layer_norm.shard(mesh=mesh)
+        self.post_attention_layer_norm.shard(mesh=mesh)
 
-class LlamaModelWeight(NamedTuple):
+
+@jax.tree_util.register_pytree_node_class
+@dataclass
+class LlamaModelWeight:
     embed_tokens: LiJAXEmbed
     layers: List[LlamaBlockWeight]
-    norm: LlamaRMSNorm
+    norm: LiJAXRMSNorm
+
+    def tree_flatten(self):
+        return (self.embed_tokens, self.layers, self.norm), {}
+
+    @classmethod
+    def tree_unflatten(cls, aux_data, children):
+        return cls(*children)
 
     def __repr__(self) -> str:
         return (
@@ -148,11 +170,26 @@ class LlamaModelWeight(NamedTuple):
             f")"
         )
 
+    def shard(self, mesh: Mesh = get_mesh((1, -1))):
+        self.embed_tokens.shard(mesh=mesh)
+        for layer in self.layers:
+            layer.shard(mesh=mesh)
+        self.norm.shard(mesh=mesh)
 
-class LlamaForCausalLMWeight(NamedTuple):
+
+@jax.tree_util.register_pytree_node_class
+@dataclass
+class LlamaForCausalLMWeight:
     config: LiJAXLlamaConfig
     model: LlamaModelWeight
     lm_head: LiJAXLinear
+
+    def tree_flatten(self):
+        return (self.config, self.model, self.lm_head), {}
+
+    @classmethod
+    def tree_unflatten(cls, aux_data, children):
+        return cls(*children)
 
     def __repr__(self) -> str:
         model_repr = self.model.__repr__().replace("\n", "\n\t")
@@ -164,6 +201,10 @@ class LlamaForCausalLMWeight(NamedTuple):
             f"\tlm_head={lm_head_repr}\n"
             f")"
         )
+
+    def shard(self, mesh: Mesh = get_mesh((1, -1))):
+        self.model.shard(mesh=mesh)
+        self.lm_head.shard(mesh=mesh)
 
 
 _c_axes = lambda x: x.transpose(0, 2, 1, 3)
@@ -348,6 +389,23 @@ def forward_llama_mlp(
     )
 
 
+# @partial(
+#     jax.jit,
+#     static_argnames=[
+#         "rms_norm_eps",
+#         "num_attention_heads",
+#         "causal_mask",
+#         "hidden_size",
+#         "num_key_value_heads",
+#         "max_sequence_length",
+#         "runtime_dtype",
+#         "runtime_kernel",
+#         "use_flash_attention",
+#         "interpret",
+#         "block_key",
+#         "block_query",
+#     ]
+# )
 def forward_llama_block(
         block: LlamaBlockWeight,
         hidden_states: Array,
@@ -371,7 +429,11 @@ def forward_llama_block(
 ) -> Tuple[Array, Optional[KVMemory]]:
     attention_output, new_key_values = forward_llama_attention(
         block=block.self_attn,
-        hidden_states=block.input_layer_norm(hidden_states, rms_norm_eps, runtime_dtype),
+        hidden_states=block.input_layer_norm(
+            x=hidden_states,
+            eps=rms_norm_eps,
+            dtype=runtime_dtype
+        ),
         interpret=interpret,
         position_ids=position_ids,
         attention_mask=attention_mask,
@@ -402,6 +464,26 @@ def forward_llama_block(
     return hidden_states, new_key_values
 
 
+# @partial(
+#     jax.jit,
+#     static_argnames=[
+#         "rms_norm_eps",
+#         "num_attention_heads",
+#         "hidden_size",
+#         "num_key_value_heads",
+#         "max_sequence_length",
+#         "num_hidden_layers",
+#         "max_position_embeddings",
+#         "rope_theta",
+#         "rope_type",
+#         "runtime_dtype",
+#         "runtime_kernel",
+#         "use_flash_attention",
+#         "interpret",
+#         "block_key",
+#         "block_query"
+#     ]
+# )
 def forward_llama_model(
         block: LlamaModelWeight,
         input_ids: Array,
@@ -544,8 +626,9 @@ def llama_generate(
         top_k: int = 0,
         top_p: float = 1,
         do_padding: bool = False,
-        rng_generator: GenerateRNG = GenerateRNG(seed=48)
-) -> Generator[Array, None, None]:
+        rng_generator: GenerateRNG = GenerateRNG(seed=48),
+        eos_token_id: Optional[int] = None,
+) -> Generator[Array, None, None] | None:
     batch_size, seq_length = input_ids.shape
     if max_length is None:
         max_length = block.config.max_position_embeddings
@@ -586,6 +669,9 @@ def llama_generate(
             top_k=top_k,
             top_p=top_p,
         )
+
+        if next_token == eos_token_id:
+            break
         input_ids = next_token
         attention_mask = jnp.ones_like(next_token)
         position_ids = position_ids[:, -1:] + 1
@@ -593,4 +679,5 @@ def llama_generate(
             lambda x: x.astype("i4"),
             [input_ids, attention_mask, position_ids]
         )
+
         yield next_token

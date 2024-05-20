@@ -8,6 +8,7 @@ __pycache__/
 lijax_llama_model.pkl
 # Distribution / packaging
 .Python
+experimental.py
 build/
 develop-eggs/
 dist/

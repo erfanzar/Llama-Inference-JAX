@@ -1,6 +1,6 @@
 import jax
 from jax.interpreters import pxla
-from jax.sharding import Mesh, PartitionSpec
+from jax.sharding import Mesh, PartitionSpec, NamedSharding
 from jax.experimental import mesh_utils
 from functools import lru_cache
 from jax.lax import with_sharding_constraint as _with_sharding_constraint
@@ -14,7 +14,7 @@ def get_mesh(dims: tuple[int, int] = (1, -1)):
     return Mesh(mesh_utils.create_device_mesh(mesh_array.shape), AXIS_SHARDING_NAMES)
 
 
-def check_sharding(mesh: Mesh, array: jax.Array):
+def check_sharding(mesh: Mesh, array: jax.Array) -> NamedSharding:
     assert array.ndim <= 2
 
     o_partition = "tensor" if (array.shape[-1] / mesh.shape["tensor"]).is_integer() else None
@@ -23,11 +23,20 @@ def check_sharding(mesh: Mesh, array: jax.Array):
     )
 
     if array.ndim == 2:
-        return PartitionSpec(f_partition, o_partition)
+        return NamedSharding(
+            mesh=mesh,
+            spec=PartitionSpec(f_partition, o_partition)
+        )
     elif array.ndim == 1:
         if o_partition is not None:
-            return PartitionSpec(o_partition)
-        return PartitionSpec(f_partition)
+            return NamedSharding(
+                mesh=mesh,
+                spec=PartitionSpec(o_partition)
+            )
+        return NamedSharding(
+            mesh=mesh,
+            spec=PartitionSpec(f_partition)
+        )
     raise ValueError()
 
 
@@ -49,6 +58,11 @@ def get_names_from_partition_spec(partition_specs):
             names.update(get_names_from_partition_spec(item))
 
     return list(names)
+
+
+def apply_sharding(array: jax.Array, sharding: NamedSharding):
+    array = jax.make_array_from_callback(array.shape, sharding, lambda idx: array[idx])
+    return array
 
 
 def with_sharding_constraint(x, partition_specs):
