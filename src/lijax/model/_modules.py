@@ -237,17 +237,18 @@ class LiJAXEmbed:
 class KVMemory:
     key: Array
     value: Array
+    mask: Array
     step: Optional[Array]
 
     def tree_flatten(self):
-        children = (self.key, self.value, self.step)
+        children = (self.key, self.value, self.mask, self.step)
         aux_data = {}  # No additional metadata needed
         return children, aux_data
 
     @classmethod
     def tree_unflatten(cls, aux_data, children):
-        key, value, step = children
-        return cls(key, value, step)
+        key, value, mask, step = children
+        return cls(key, value, mask, step)
 
     @classmethod
     def init_memory(
@@ -261,6 +262,7 @@ class KVMemory:
         return cls(
             key=jnp.zeros((batch_size, sequence_length, num_key_value_heads, head_dims), dtype=dtype),
             value=jnp.zeros((batch_size, sequence_length, num_key_value_heads, head_dims), dtype=dtype),
+            mask=jnp.zeros((batch_size, 1, sequence_length, sequence_length), dtype="bool"),
             step=jnp.array(0, dtype="i4")
         )
 
@@ -278,6 +280,7 @@ class KVMemory:
             cls(
                 key=jnp.zeros((batch_size, sequence_length, num_key_value_heads, head_dims), dtype=dtype),
                 value=jnp.zeros((batch_size, sequence_length, num_key_value_heads, head_dims), dtype=dtype),
+                mask=jnp.zeros((batch_size, 1, sequence_length, sequence_length), dtype="bool"),
                 step=jnp.array(0, dtype="i4")
             ) for _ in range(num_hidden_layers)
         ]

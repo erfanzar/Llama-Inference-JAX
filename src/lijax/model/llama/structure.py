@@ -1,4 +1,6 @@
 import math
+import os
+import pickle
 from typing import Optional, List, Union, Dict, Tuple, Literal, Generator, NamedTuple
 from functools import partial
 import jax.lax
@@ -206,6 +208,13 @@ class LlamaForCausalLMWeight:
         self.model.shard(mesh=mesh)
         self.lm_head.shard(mesh=mesh)
 
+    def save(self, path: os.PathLike | str):
+        pickle.dump(self, open(path, "wb"))
+
+    @classmethod
+    def load(cls, path: os.PathLike | str):
+        return pickle.load(open(path, "rb"))
+
 
 _c_axes = lambda x: x.transpose(0, 2, 1, 3)
 
@@ -282,17 +291,17 @@ def forward_llama_attention(
         query = _c_axes(query)  # B H S D -> B S H D
         key = _c_axes(key)  # B H S D -> B S H D
         indices = (0,) * len(batch_dims) + (cur_index, 0, 0)  # type:ignore
+        mask_indices = (0,) * len(batch_dims) + (0, cur_index, 0)  # type:ignore
         value = jax.lax.dynamic_update_slice(past_key_values.value, value, indices)
         key = jax.lax.dynamic_update_slice(past_key_values.key, key, indices)
-        pad_mask = jnp.broadcast_to(
-            jnp.arange(max_length) < cur_index + sequence_length,
-            tuple(batch_dims) + (1, sequence_length, max_length),
-        )
+        pad_mask = jax.lax.dynamic_update_slice(past_key_values.mask, attention_mask, mask_indices)
+        # TODO:FIX THIS ONE OVER HERE
         attention_mask = jnp.logical_and(pad_mask, attention_mask)
         new_past_key_values = KVMemory(
             key=key,
             value=value,
             step=cur_index + sequence_length,
+            mask=attention_mask
         )
         query = _c_axes(query)  # B S H D -> B H S D
         key = _c_axes(key)  # B S H D -> B H S D
@@ -309,14 +318,16 @@ def forward_llama_attention(
 
         indices = (0,) * len(batch_dims) + (0, 0, 0)  # type:ignore
         num_updated_cache_vectors = query.shape[1]
-        new_past_key_values = KVMemory(
-            key=jax.lax.dynamic_update_slice(past_key_values.key, _c_axes(key), indices),
-            value=jax.lax.dynamic_update_slice(past_key_values.value, value, indices),
-            step=num_updated_cache_vectors,
-        )
         causal_mask = causal_mask[jnp.newaxis, jnp.newaxis, :query_length, :key_length]
         causal_mask = jnp.broadcast_to(causal_mask, (batch_size,) + causal_mask.shape[1:])
         attention_mask = jnp.broadcast_to(jnp.expand_dims(attention_mask, axis=(-3, -2)), causal_mask.shape)
+
+        new_past_key_values = KVMemory(
+            key=jax.lax.dynamic_update_slice(past_key_values.key, _c_axes(key), indices),
+            value=jax.lax.dynamic_update_slice(past_key_values.value, value, indices),
+            mask=jax.lax.dynamic_update_slice(past_key_values.mask, attention_mask, indices),
+            step=num_updated_cache_vectors,
+        )
         attention_mask = jnp.logical_and(attention_mask, causal_mask)
 
     else:
@@ -635,13 +646,14 @@ def llama_generate(
     if do_padding:
         input_ids, attention_mask = prepare_input(input_ids, max_length - max_new_tokens)
         position_ids = attention_mask.cumsum(axis=-1) - 1
-        input_ids, attention_mask, position_ids = map(
+        input_ids, position_ids = map(
             lambda x: x.astype("i4"),
-            [input_ids, attention_mask, position_ids]
+            [input_ids, position_ids]
         )
+        attention_mask = attention_mask.astype("bool")
     else:
         if attention_mask is None:
-            attention_mask = jnp.ones_like(input_ids)
+            attention_mask = jnp.ones_like(input_ids, dtype="bool")
         if position_ids is None:
             position_ids = jnp.atleast_2d(attention_mask.cumsum(axis=-1) - 1).astype("i4")
     for _ in range(max_new_tokens):
@@ -673,11 +685,11 @@ def llama_generate(
         if next_token == eos_token_id:
             break
         input_ids = next_token
-        attention_mask = jnp.ones_like(next_token)
+        attention_mask = jnp.ones_like(next_token, dtype="bool")
         position_ids = position_ids[:, -1:] + 1
-        input_ids, attention_mask, position_ids = map(
+        input_ids, position_ids = map(
             lambda x: x.astype("i4"),
-            [input_ids, attention_mask, position_ids]
+            [input_ids, position_ids]
         )
-
+        attention_mask = attention_mask.astype("bool")
         yield next_token
