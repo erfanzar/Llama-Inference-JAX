@@ -237,18 +237,17 @@ class LiJAXEmbed:
 class KVMemory:
     key: Array
     value: Array
-    mask: Array
     step: Optional[Array]
 
     def tree_flatten(self):
-        children = (self.key, self.value, self.mask, self.step)
+        children = (self.key, self.value, self.step)
         aux_data = {}  # No additional metadata needed
         return children, aux_data
 
     @classmethod
     def tree_unflatten(cls, aux_data, children):
-        key, value, mask, step = children
-        return cls(key, value, mask, step)
+        key, value, step = children
+        return cls(key, value, step)
 
     @classmethod
     def init_memory(
@@ -258,12 +257,12 @@ class KVMemory:
             head_dims: int,
             num_key_value_heads: int,
             dtype=jnp.bfloat16,
+            step=jnp.array(0, dtype="i4")
     ) -> "KVMemory":  # type:ignore
         return cls(
             key=jnp.zeros((batch_size, sequence_length, num_key_value_heads, head_dims), dtype=dtype),
             value=jnp.zeros((batch_size, sequence_length, num_key_value_heads, head_dims), dtype=dtype),
-            mask=jnp.zeros((batch_size, 1, sequence_length, sequence_length), dtype="bool"),
-            step=jnp.array(0, dtype="i4")
+            step=step
         )
 
     @classmethod
@@ -275,13 +274,13 @@ class KVMemory:
             num_key_value_heads: int,
             num_hidden_layers: int,
             dtype=jnp.bfloat16,
+            step=jnp.array(0, dtype="i4")
     ) -> "List[KVMemory]":  # type:ignore
         return [
             cls(
                 key=jnp.zeros((batch_size, sequence_length, num_key_value_heads, head_dims), dtype=dtype),
                 value=jnp.zeros((batch_size, sequence_length, num_key_value_heads, head_dims), dtype=dtype),
-                mask=jnp.zeros((batch_size, 1, sequence_length, sequence_length), dtype="bool"),
-                step=jnp.array(0, dtype="i4")
+                step=step
             ) for _ in range(num_hidden_layers)
         ]
 

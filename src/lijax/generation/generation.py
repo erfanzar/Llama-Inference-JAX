@@ -70,8 +70,8 @@ def sample_next_token(
     # Sample from the filtered logits.
     probs = jax.nn.softmax(logits, axis=-1)
     if do_sample:
-        return jnp.atleast_2d(jax.random.categorical(rng, probs)[:, -1])
-    return jnp.atleast_2d(jnp.argmax(probs, -1)[:, -1])
+        return jax.random.categorical(rng, probs)[:, -1:]
+    return jnp.argmax(probs, -1)[:, -1:]
 
 
 class BaseStreamer:

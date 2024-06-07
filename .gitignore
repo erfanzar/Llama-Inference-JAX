@@ -9,6 +9,7 @@ lijax_llama_model.pkl
 # Distribution / packaging
 .Python
 *.lijax
+env.py
 experimental.py
 build/
 develop-eggs/
