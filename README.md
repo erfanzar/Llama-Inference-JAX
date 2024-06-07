@@ -3,8 +3,8 @@
 Accelerated inference with Llama Models in JAX for high-speed, pure JAX implementation.
 
 > [!NOTE]
->
 > This project will only support Llama Models (at least for now), and focuses on local machines
+> and it's just an example to show people how they can implement their own model using pure jax 
 > so if you are more likely trying to use this project for any other purposes I suggest you check
 > out [EasyDeL](https://github.com/erfanzar/EasyDeL).
 

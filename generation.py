@@ -18,8 +18,8 @@ def prompt_model(
 
 def main():
     tokenizer = AutoTokenizer.from_pretrained("jan-hq/LlamaCorn-1.1B-Chat")
-    # lijax_model = convert_llama_model("jan-hq/LlamaCorn-1.1B-Chat")
-    # lijax_model.save("LlamaCorn.lijax")
+    lijax_model = convert_llama_model("jan-hq/LlamaCorn-1.1B-Chat")
+    lijax_model.save("LlamaCorn.lijax")
     lijax_model = LlamaForCausalLMWeight.load("LlamaCorn.lijax")
     lijax_model.shard()
     tokenizer.chat_template = "{% for message in messages %}{{'<|im_start|>' + message['role'] + '\n' + message['content']}}{% if (loop.last and add_generation_prompt) or not loop.last %}{{ '<|im_end|>' + '\n'}}{% endif %}{% endfor %}{% if add_generation_prompt and messages[-1]['role'] != 'assistant' %}{{ '<|im_start|>assistant\n' }}{% endif %}"

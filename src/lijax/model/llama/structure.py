@@ -608,10 +608,8 @@ def llama_generate(
         block_query: int = 128,
         max_new_tokens: int = 512,
         max_length: Optional[int] = None,
-        do_sample: bool = False,
-        temperature: float = 1.,
-        top_k: int = 0,
-        top_p: float = 1,
+        temperature: float = 0,
+        top_p: float = 0.95,
         do_padding: bool = False,
         rng_generator: GenerateRNG = GenerateRNG(seed=48),
         eos_token_id: Optional[int] = None,
@@ -664,9 +662,7 @@ def llama_generate(
         next_token = sample_next_token(
             logits=logits,
             rng=rng_generator.rng,
-            do_sample=do_sample,
             temperature=temperature,
-            top_k=top_k,
             top_p=top_p,
         )
 
